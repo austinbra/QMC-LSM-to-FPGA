@@ -6,7 +6,7 @@
 #include <boost/random/sobol.hpp>
 #include "types.h"
 
-class SobolGenerator {
+class SobolGenerator{
 public:
     // dimension = number of coordinates per Sobol point
     // skip is how many points to skip at the start (default 0)
