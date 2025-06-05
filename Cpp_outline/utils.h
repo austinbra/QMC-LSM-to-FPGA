@@ -30,4 +30,7 @@ bool parseArgs(int argc, char* argv[],
                double& T     // maturity
 );
 
+
+//g++ -std=c++17 -O2 -I"C:\Users\atxbr\Documents\libraries\boost_1_88_0\" main.cpp utils.cpp sobol_wrapper.cpp pricing.cpp linalg.cpp -o main.exe
+
 #endif
