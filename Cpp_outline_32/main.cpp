@@ -10,11 +10,15 @@ int main(int argc, char *argv[])
     // initialize parameters with default values from types.h
     int N = N_DEFAULT;          // number of paths
     int M = M_DEFAULT;          // number of time steps
-    Real S0 = S0_DEFAULT;       // spot price
-    Real K = K_DEFAULT;         // strike price
-    Real r = r_DEFAULT;         // risk-free rate
-    Real sigma = sigma_DEFAULT; // volatility
-    Real T = T_DEFAULT;
+    int32_t S0 = S0_DEFAULT;       // spot price
+    int32_t K = K_DEFAULT;         // strike price
+    int32_t r = r_DEFAULT;         // risk-free rate
+    int32_t sigma = sigma_DEFAULT; // volatility
+    int32_t T = T_DEFAULT;
+
+    // 2) Compute dt = T / M in Q9.23
+    int32_t M_q   = toint32_t(double(M));
+    int32_t dt    = fxDiv(T, M_q);
 
     // check for proper usage
     if (!parseArgs(argc, argv, N, M, S0, K, r, sigma, T))
@@ -43,8 +47,11 @@ int main(int argc, char *argv[])
     simulatePaths(N, M, S0, r, sigma, T, sobol, paths);
 
     // perform LSM regression to compute price
-    Real price = 0.0;
+    int32_t price;
     backwardInduction(N, M, r, T, K, paths, price);
+
+    double price_d = toDouble(price);//back to 32
+
 
     // get time simulation took
     double elapsed = timer.elapsed();
