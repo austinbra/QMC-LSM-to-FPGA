@@ -37,7 +37,7 @@ static void solve3x3System(const Real A_in[3][3], const Real B_in[3], Real beta[
             std::cerr << "solve3x3System: pivot too small or det = 0.\n";
             return;
         }
-
+ 
         //2) swap the best row with the current pivot row
         if (best_row != pivot) {
             for (int c = pivot; c < 4; ++c){
@@ -84,23 +84,22 @@ void solveRegression3x3(const std::vector<Real>& X, const std::vector<Real>& Y, 
     for (int i = 0; i < n; ++i){
         Real x = X[i];
         Real y = Y[i];
-        Real b0 = 1.0;
+        Real b0 = toint32_t(1.0);
         Real b1 = x;
-        Real b2 = x * x;
+        Real b2 = fxMul(x, x);
 
-        A[0][0] += b0 * b0; // = n if we use all X, but here only in‐the‐money
-        A[0][1] += b0 * b1;
-        A[0][2] += b0 * b2;
-        A[1][0] += b1 * b0;
-        A[1][1] += b1 * b1;
-        A[1][2] += b1 * b2;
-        A[2][0] += b2 * b0;
-        A[2][1] += b2 * b1;
-        A[2][2] += b2 * b2;
-
-        Bvec[0] += b0 * y;
-        Bvec[1] += b1 * y;
-        Bvec[2] += b2 * y;
+        A[0][0] = fxAdd(A[0][0], fxMul(b0, b0));
+        A[0][1] = fxAdd(A[0][1], fxMul(b0, b1));
+        A[0][2] = fxAdd(A[0][2], fxMul(b0, b2));
+        A[1][0] = fxAdd(A[1][0], fxMul(b1, b0));
+        A[1][1] = fxAdd(A[1][1], fxMul(b1, b1));
+        A[1][2] = fxAdd(A[1][2], fxMul(b1, b2));
+        A[2][0] = fxAdd(A[2][0], fxMul(b2, b0));
+        A[2][1] = fxAdd(A[2][1], fxMul(b2, b1));
+        A[2][2] = fxAdd(A[2][2], fxMul(b2, b2));
+        Bvec[0] = fxAdd(Bvec[0], fxMul(b0, y));
+        Bvec[1] = fxAdd(Bvec[1], fxMul(b1, y));
+        Bvec[2] = fxAdd(Bvec[2], fxMul(b2, y));
     }
     solve3x3System(A, Bvec, beta_out);
 }

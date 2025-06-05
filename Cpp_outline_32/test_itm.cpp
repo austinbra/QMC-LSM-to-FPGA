@@ -1,4 +1,3 @@
-// test_itm.cpp
 #include <iostream>
 #include <iomanip>
 #include <vector>
