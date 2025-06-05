@@ -31,6 +31,24 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // start timer to test simulation speed
+    Timer timer;
+    timer.reset();
+
     // create sobol generator
     SobolGenerator sobol(M);
+
+    // generate paths using QMC Sobol and GBM
+    std::vector<Path> paths(N, Path(M));
+    simulatePaths(N, M, S0, r, sigma, T, sobol, paths);
+
+    // perform LSM regression to compute price
+    Real price = 0.0;
+    backwardInduction(N, M, r, T, K, paths, price);
+
+    // get time simulation took
+    double elapsed = timer.elapsed();
+
+    std::cout << "Estimated Option Price: " << price << "\n";
+    std::cout << "Elapsed Time: " << elapsed << " seconds\n";
 }
