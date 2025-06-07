@@ -1,6 +1,6 @@
 module tb_sobol;
     logic [31:0] N;
-    
+
     localparam M = 12;
     logic [$clog2(M)-1:0] dim;
 
@@ -21,3 +21,6 @@ module tb_sobol;
         $finish;
     end
 endmodule
+
+//iverilog -g2012 -o sobol_test sobol.v tb_sobol.sv
+//vvp sobol_test
