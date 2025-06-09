@@ -20,6 +20,7 @@ module solveRegression3x3 #(
         LOAD,
         PIVOT_ROW_0,
         NORMALIZE_ROW_0,
+        ELIMINATE_COLUMN_0,
         DONE
     } state_t;
     state_t state, next_state;      // current and next states
@@ -32,9 +33,30 @@ module solveRegression3x3 #(
     reg normalize_active;
     wire signed [WIDTH-1:0] norm_result;
 
+    // intermediate registers to avoid passing 2D array into fxDiv
+    reg signed [WIDTH-1:0] numerator;
+    reg signed [WIDTH-1:0] demoninator;
+    numerator <= augmented[0][norm_col];
+    denominator <= augmented[0][0];
+
     fxDiv #(WIDTH, 31) div0 (
-        .numerator(augmented[0][norm_col])
-    )
+        .numerator(numerator),
+        .denominator(denominator),
+        .result(norm_result)
+    );
+
+    // elimination registers
+    reg [1:0] elim_row;
+    reg [1:0] elim_col;
+    reg elimination_active;
+
+    wire signed [WIDTH-1:0] elim_mul_result;
+
+    fxMul #(WIDTH) mul0 (
+        .a(augmented[elim_row][0]),
+        .b(augmented[0][elim_col]),
+        .result(elim_mul_result)
+    );
 
     // state transition logic
     always_comb begin
@@ -42,7 +64,8 @@ module solveRegression3x3 #(
             IDLE:               next_state = start ? LOAD : IDLE;
             LOAD:               next_state = PIVOT_ROW_0;
             PIVOT_ROW_0:        next_state = NORMALIZE_ROW_0;
-            NORMALIZE_ROW_0:    next_state = DONE;
+            NORMALIZE_ROW_0:    next_state = (normalize_active && norm_col < 4) ? NORMALIZE_ROW_0 : ELIMINATE_COLUMN_0;
+            ELIMINATE_COLUMN_0: next_state = DONE;
             DONE:               next_state = IDLE;
             default:            next_state = IDLE;
         endcase
@@ -64,6 +87,8 @@ module solveRegression3x3 #(
         case (state)
             IDLE: begin
                 done <= 0;
+                norm_col <= 0;
+                normalize_active <= 0;
             end
 
             LOAD: begin
@@ -113,10 +138,34 @@ module solveRegression3x3 #(
             end
             
             NORMALIZE_ROW_0: begin
-                reg signed [WIDTH-1:0] pivot_val;
-                pivot_val = augmented[0][0];
+                done <= 0;
 
-                for (integer column = 0; column < 4; column++) begin
+                // set normalization_active high to start
+                if (!normalization_active) begin
+                    norm_col = 0;
+                    normalization_active <= 1;
+                end
+                else if (norm_col < 4) begin
+                    augmented[0][norm_col] <= norm_result;
+                    norm_col <= norm_col + 1;
+                end
+                else begin
+                    normalize_active <= 0; 
+                end
+            end
+
+            ELIMINATE_COLUMN_0: 
+                done <= 0;
+
+                // set elimination_active high if first entry
+                if (!elimination_active) begin
+                    elim_row <= 1;
+                    elim_col <= 0;
+                    elimination_active <= 1;
+                end
+
+                else if (elim_row <= 3 && elim_col < 4) begin
+                    augmented[elim_row][elim_col] <= augmented[elim_row][elim_col]
 
             DONE: begin
                 done <= 1;
