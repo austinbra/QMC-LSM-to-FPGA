@@ -1,7 +1,7 @@
 module solveRegression3x3 #(
-    parameter WIDTH = 32;        // for 32 bit fixed point
-    parameter MUL_LATENCY = 2;
-    parameter DIV_LATENCY = 3;
+    parameter WIDTH = 32,
+    parameter MUL_LATENCY = 2,
+    parameter DIV_LATENCY = 3
 )(
     input wire clk,
     input wire rst,
@@ -10,26 +10,25 @@ module solveRegression3x3 #(
     // input matricies: 3x3 matrix A and 3x1 vector B
     // flattened so that A[3][3] maps to A_flat[0...8]
     input wire signed [WIDTH-1:0] A_flat [0:8],
-    input wire signed [WIDTH-1:0] B_flat [3],
+    input wire signed [WIDTH-1:0] B_flat [0:2],
 
     output reg done,                             // signals when regression is complete
     output reg signed [WIDTH-1:0] beta [0:2]     // solution vector
 );
 
-    // define FSM states
-    typedef enum logic [3:0] {
-        IDLE,
-        LOAD,
-        PIVOT_ROW_0,
-        NORMALIZE_ROW_0,
-        ELIMINATE_COLUMN_0,
-        PIVOT_ROW_1,
-        NORMALIZE_ROW_1,
-        ELIMINATE_COLUMN_1,
-        BACK_SUB,
-        DONE
-    } state_t;
-    state_t state, next_state;      // current and next states
+    // define FSM states using localparam
+    localparam IDLE               = 4'd0;
+    localparam LOAD               = 4'd1;
+    localparam PIVOT_ROW_0        = 4'd2;
+    localparam NORMALIZE_ROW_0    = 4'd3;
+    localparam ELIMINATE_COLUMN_0 = 4'd4;
+    localparam PIVOT_ROW_1        = 4'd5;
+    localparam NORMALIZE_ROW_1    = 4'd6;
+    localparam ELIMINATE_COLUMN_1 = 4'd7;
+    localparam BACK_SUB           = 4'd8;
+    localparam DONE               = 4'd9;
+
+    logic [3:0] state, next_state;      // current and next states
 
     // create augmented matrix from 
     reg signed [WIDTH-1:0] augmented [0:2][0:3];
@@ -90,8 +89,8 @@ module solveRegression3x3 #(
     );
 
     // back sub signals
-    wire signed[WIDTH-1:0] bs_mul_a;
-    wire signed[WIDTH-1:0] bs_mul_b;
+    logic signed [WIDTH-1:0] bs_mul_a;
+    logic signed [WIDTH-1:0] bs_mul_b;
     wire signed [WIDTH-1:0] bs_mul_result;
     reg signed [WIDTH-1:0] acc;                 // partial rhs during back sub
     reg [1:0] bs_step;                          // step tracker from beta2=0 to beta0=2
@@ -101,23 +100,6 @@ module solveRegression3x3 #(
         .b(bs_mul_b),                       // assigned below
         .result(bs_mul_result)
     );
-
-    always_comb begin
-        case (bs_step)
-            1: begin
-                bs_mul_a = augmented[1][2];
-                bs_mul_b = beta[2];
-            end
-            2: begin
-                bs_mul_a = augmented[0][1];
-                bs_mul_b = beta[1];
-            end
-            default: begin
-                bs_mul_a = 0;
-                bs_mul_b = 0;
-            end
-        endcase
-    end
 
     // state transition logic
     always_comb begin
@@ -175,6 +157,10 @@ module solveRegression3x3 #(
 
     // define loop counters
     integer i, j;
+    integer row, column;
+    reg [1:0] best_row;
+    reg signed [WIDTH-1:0] best_val;
+    reg signed [WIDTH-1:0] curr_val;
 
     // flag for division
     reg issued_div;
@@ -206,13 +192,6 @@ module solveRegression3x3 #(
             PIVOT_ROW_0: begin
                 done <= 0;
 
-                // define loop counters
-                integer row, column;
-
-                reg [1:0] best_row;                         // keeps track of best row found
-                reg signed [WIDTH-1:0] best_val;            // keeps track of best value found
-                reg signed [WIDTH-1:0] curr_val;            // holds current value to be compared
-
                 // step 1: initialize row 0 as pivot row
                 best_row = 0;
                 best_val = (augmented[0][0] < 0) ? -augmented[0][0] : augmented[0][0];      // get value with greatest magnitude
@@ -223,7 +202,7 @@ module solveRegression3x3 #(
 
                     // update best_row if current row has a larger absolute value
                     if (curr_val > best_val) begin
-                        best_val = cur_val;
+                        best_val = curr_val;
                         best_row = row;
                     end
                 end
@@ -295,10 +274,6 @@ module solveRegression3x3 #(
 
             PIVOT_ROW_1: begin
                 done <= 0;
-                integer row, column;
-                reg [1:0] best_row;
-                reg signed [WIDTH-1:0] best_val;
-                reg signed [WIDTH-1:0] cur_val;
 
                 // assume row 1 is best to start
                 best_row = 1;
@@ -307,9 +282,9 @@ module solveRegression3x3 #(
                 best_val = (augmented[1][1] < 0) ? -augmented[1][1] : augmented[1][1];
 
                 // compare to row 2
-                cur_val = (augmented[2][1] < 0) ? -augmented[2][1] : augmented[2][1];
+                curr_val = (augmented[2][1] < 0) ? -augmented[2][1] : augmented[2][1];
                 if (curr_val > best_val) begin
-                    best_val = cur_val;
+                    best_val = curr_val;
                     best_row = 2;
                 end
 
@@ -329,26 +304,31 @@ module solveRegression3x3 #(
                 done <= 0;
                 current_row <= 1;
                 pivot_col <= 1;
-
+            
                 if (!normalize_active) begin
                     norm_col <= 1;
                     normalize_active <= 1;
                     issued_div <= 0;
                     div_start <= 1;
-                end else if (!div_done) begin
+                end 
+                else if (!div_done) begin
                     // Wait for division to complete
-                end else if (div_done && !issued_div) begin
+                end 
+                else if (div_done && !issued_div) begin
                     issued_div <= 1;
-                end else if (div_done && issued_div && norm_col < 4) begin
+                end 
+                else if (div_done && issued_div) begin
                     augmented[1][norm_col] <= norm_result;
-                    norm_col <= norm_col + 1;
-                    div_start <= 1;
-                    issued_div <= 0;
-                end else if (norm_col >= 4) begin
-                    normalize_active <= 0;
+                    if (norm_col == 3) begin
+                        normalize_active <= 0;
+                        issued_div <= 0;
+                    end else begin
+                        norm_col <= norm_col + 1;
+                        div_start <= 1;
+                        issued_div <= 0;
+                    end
                 end
             end
-
 
             ELIMINATE_COLUMN_1: begin
                 done <= 0;
@@ -416,7 +396,8 @@ module solveRegression3x3 #(
         endcase
     end
 
-    always_ff @(posedge clk) begin
+    // simulation-only display
+    always @(posedge clk) begin
         if (done) begin
             $display("Regression Done.");
             $display("beta[0] = %0d", beta[0]);
@@ -424,4 +405,8 @@ module solveRegression3x3 #(
             $display("beta[2] = %0d", beta[2]);
         end
     end
+    always_ff @(posedge clk) begin
+        $display("FSM state: %0d", state);
+    end
+
 endmodule
