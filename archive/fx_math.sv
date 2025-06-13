@@ -1,4 +1,5 @@
 // fixed point divide and multiply in Q11.21 format
+//component dependent and slower clock
 
 `timescale 1ns / 1ps
 
