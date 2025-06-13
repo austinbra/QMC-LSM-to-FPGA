@@ -11,11 +11,16 @@ module sobol #(
         $readmemh("gen/direction.mem", direction); //expects M×32 hex lines
     end
 
+    // Gray‐code of index: ensures only one bit flips per step
+    wire [31:0] gray = N ^ (N >> 1);
+
+
     integer j;
     always_comb begin //similar to always @(*) but includes all inputs automatically instead of "always @(a or b or c)"
         sobol_out = 32'd0; //32 bits of the decimal (d) = 0
         for (j = 0; j < 32; j = j + 1) begin
-            if (N[j]) begin //only compute the j'th bits of N that are 1
+            // XOR in the j-th direction number whenever gray[j] = 1
+            if (gray[j]) begin //only compute the j'th bits of N that are 1
                 sobol_out ^= direction[dim * 32 + j]; // direction[dim * 32 + j] = v_j
             end
         end
