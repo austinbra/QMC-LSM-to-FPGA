@@ -1,6 +1,6 @@
 module fxMul #(
     parameter WIDTH = 32, //data width
-    parameter LATENCY = 2, //pipeline stages
+    parameter LATENCY = 1, //pipeline stages
     parameter Qint = 16,    //int bits for Q format
     parameter Qfrac = WIDTH - Qint //fractional bits
 )(
@@ -18,10 +18,9 @@ module fxMul #(
     // Stage 0: input registers
     logic signed [WIDTH-1:0]  a_reg, b_reg;
     logic start_reg;
-    logic signed [2*WIDTH-1:0] dsp_pipe;
 
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst) begin
+    always_ff @(posedge clk or negedge rst) begin
+        if (!rst) begin
             a_reg <= 0;
             b_reg <= 0;
             start_reg <= 0;
@@ -37,41 +36,41 @@ module fxMul #(
     logic signed [2*WIDTH-1:0] mul_pipe [0:LATENCY];
 
     integer i;
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst) begin
+    always_ff @(posedge clk or negedge rst) begin
+        if (!rst) begin
             for (i = 0; i <= LATENCY; i = i + 1)
                 mul_pipe[i] <= '0;
         end
         else begin
             //stage 1 multiply and capture
-            mul_pipe[0] <= a_reg * b_reg;
+            mul_pipe[0] <= a_reg * b_reg;//will change later to optimize, look at fxmul and fxdiv phase 2 in drive
             // stages 2 to LATENCY+1, shift the previous values down the pipeline
             for (i = 1; i <= LATENCY; i = i + 1)
                 mul_pipe[i] <= mul_pipe[i-1];
         end
     end
 
-    // get QINT.QFRAC result from the 2*WIDTH-bit product
+    // get Qint.Qfrac result from the 2*WIDTH-bit product
     
-    // the raw product has 2*QFRAC fractional bits  to align to QFRAC im shifting right by QFRAC
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst) begin
+    // the raw product has 2*Qfrac fractional bits  to align to Qfrac im shifting right by Qfrac
+    always_ff @(posedge clk or negedge rst) begin
+        if (!rst) begin
             result <= '0;
         end
         else begin
-            result <= mul_pipe[LATENCY][QFRAC +: WIDTH];
+            // select bits [Qfrac + WIDTH–1 : Qfrac] from the 2*WIDTH–1 downto 0 vector
+            result <= mul_pipe[LATENCY][Qfrac + WIDTH-1 : Qfrac];
         end
     end
 
     // Handshake: start -> done after LATENCY+1 cycles
 
     // Count cycles after start_reg so we can assert done
-
     localparam int count_WIDTH = $clog2(LATENCY + 2);//minimize bit width
     logic [count_WIDTH-1:0] cycle_cnt;
 
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst) begin
+    always_ff @(posedge clk or negedge rst) begin
+        if (!rst) begin
             cycle_cnt <= '0;
             done      <= 1'b0;
         end else if (start_reg) begin
@@ -86,44 +85,5 @@ module fxMul #(
             done <= 1'b0;
         end
     end
-
-endmodule
-
-
-
-
-module fxDiv #(
-    parameter WIDTH   = 32,
-    parameter LATENCY = 16,   // iterations or pipeline depth
-    parameter QINT    = 16,
-    parameter QFRAC   = WIDTH - QINT
-)(
-    input  logic                    clk,
-    input  logic                    rst,
-    input  logic                    start,      // pulse to start a divide
-    input  logic signed [WIDTH-1:0] numerator,  // Q-format dividend
-    input  logic signed [WIDTH-1:0] denominator,// Q-format divisor
-    output logic signed [WIDTH-1:0] result,     // Q-format result
-    output logic                    done        // asserted when quotient valid
-);
-    // Use a non-restoring or SRT divider algorithm
-    // Pipeline registers to hold partial remainder and quotient bits
-    
-    // iteration counter
-    logic [$clog2(LATENCY):0] cycle;
-    
-    always_ff @(posedge clk) begin
-      if (start) begin
-        initialize remainder, quotient, cycle <= 0;
-      end else if (!done) begin
-        // perform one subtract/shift iteration
-        cycle <= cycle + 1;
-      end
-    end
-
-    // Assign result from final quotient register
-    
-    done <= (cycle == LATENCY);
-
 
 endmodule
