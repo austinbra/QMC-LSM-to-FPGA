@@ -195,7 +195,7 @@ module regression3x3 #(
     end
 
     //-----------------------------------------------------------
-    // FSM: sequential state + handshake counters
+    // FSM state
     //-----------------------------------------------------------
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -207,7 +207,7 @@ module regression3x3 #(
 
 
     //-----------------------------------------------------------
-    // FSM: main behavior block
+    // FSM main behavior block
     //-----------------------------------------------------------
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
