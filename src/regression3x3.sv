@@ -153,36 +153,24 @@ module regression3x3 #(
     //-----------------------------------------------------------
     // Back-substitution signals
     //-----------------------------------------------------------
-    logic signed [WIDTH-1:0]    bs_a, bs_b, bs_acc;
+    logic signed [WIDTH-1:0]    bs_a, bs_b;
     logic [1:0]                 bs_step;
 
     // separate active & start flags for div (step 0) vs mul (steps 1/2)
-    logic                        bs0_active, bs1_active;
-    logic                        bs0_start,  bs1_start;
-    wire                         bs0_done,   bs1_done;
-    wire signed [WIDTH-1:0]      bs0_result, bs1_result;
-
-
-
-    fxDiv #(.WIDTH(WIDTH), .LATENCY(DIV_LATENCY)) bs_div0 (
-    .clk        (clk),
-    .rst        (rst_n),
-    .start      (bs0_start),
-    .numerator  (augmented[2][3]),
-    .denominator(augmented[2][2]),
-    .result     (bs0_result),
-    .done       (bs0_done)
-    );
+    logic                        bs_active;
+    logic                        bs_start;
+    wire                         bs_done;
+    wire signed [WIDTH-1:0]      bs_result;
 
 
     fxMul #(.WIDTH(WIDTH), .LATENCY(MUL_LATENCY)) backsub_mul (
       .clk    (clk),
       .rst    (rst_n),
-      .start  (bs1_start),
+      .start  (bs_start),
       .a      (bs_a),
       .b      (bs_b),
-      .result (bs1_result),
-      .done   (bs1_done)
+      .result (bs_result),
+      .done   (bs_done)
     );
 
     //-----------------------------------------------------------
@@ -248,11 +236,9 @@ module regression3x3 #(
             mul1_start      <= 1'b0;
 
             // back substitution
-            bs0_active <= 1'b0;
-            bs1_active <= 1'b0;
+            bs_active <= 1'b0;
             bs_step    <= 2'd0;
-            bs0_start  <= 1'b0;
-            bs1_start  <= 1'b0;
+            bs_start  <= 1'b0;
         end else begin
             //default, deassert all the starts and dones
             done <= 0;
@@ -260,8 +246,7 @@ module regression3x3 #(
             mul0_start <= 1'b0;
             div1_start <= 1'b0;
             mul1_start <= 1'b0;
-            bs0_start <= 1'b0;
-            bs1_start <= 1'b0;
+            bs_start <= 1'b0;
 
             unique case(current_state)
                 S_LOAD: begin
@@ -373,30 +358,30 @@ module regression3x3 #(
 
                         1: begin
                             // compute (aug[1][3] - aug[1][2]*beta2) by multiply then subtract
-                            if (!bs1_active) begin
-                                bs1_active <= 1;
-                                bs1_start  <= 1;
+                            if (!bs_active) begin
+                                bs_active <= 1;
+                                bs_start  <= 1;
                                 bs_a       <= augmented[1][2];
                                 bs_b       <= beta[2];
                             end
-                            else if (bs1_done) begin
-                                bs1_active <= 0;
-                                beta[1]    <= augmented[1][3] - bs1_result;
+                            else if (bs_done) begin
+                                bs_active <= 0;
+                                beta[1]    <= augmented[1][3] - bs_result;
                                 bs_step    <= 2;
                             end
                         end
 
                         2: begin
                             // compute (aug[0][3] - aug[0][1]*beta1)
-                            if (!bs1_active) begin
-                                bs1_active <= 1;
-                                bs1_start  <= 1;
+                            if (!bs_active) begin
+                                bs_active <= 1;
+                                bs_start  <= 1;
                                 bs_a       <= augmented[0][1];
                                 bs_b       <= beta[1];
                             end
-                            else if (bs1_done) begin
-                                bs1_active <= 0;
-                                beta[0]    <= augmented[0][3] - bs1_result;
+                            else if (bs_done) begin
+                                bs_active <= 0;
+                                beta[0]    <= augmented[0][3] - bs_result;
                                 bs_step    <= 3;
                             end
                         end
@@ -430,3 +415,9 @@ module regression3x3 #(
     end
 
 endmodule
+
+//cd ~/verilator_regression or mkdir
+//cp /mnt/c/Users/atxbr/Documents/GitHub/QMC-LSM-to-FPGA/src/regression3x3.sv .
+//verilator -Wall --cc regression3x3.sv fxMul.sv fxDiv.sv --exe regression3x3_tb.cpp
+//make -C obj_dir -j -f Vregression3x3.mk Vregression3x3
+// obj_dir/Vregression3x3
