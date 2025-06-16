@@ -70,18 +70,18 @@ module regression3x3 #(
 
     // compute numerator & denominator before driving fxDiv
     always_comb begin
-      div0_numer = augmented[0][norm0_col_idx];
-      div0_denom = augmented[0][0];
+        div0_numer = augmented[0][norm0_col_idx];
+        div0_denom = augmented[0][0];
     end
 
     fxDiv #(.WIDTH(WIDTH), .LATENCY(DIV_LATENCY)) normalize0_div (
-      .clk        (clk),
-      .rst        (rst_n),
-      .start      (div0_start),
-      .numerator  (div0_numer),
-      .denominator(div0_denom),
-      .result     (norm0_result),
-      .done       (div0_done)
+        .clk        (clk),
+        .rst        (rst_n),
+        .start      (div0_start),
+        .numerator  (div0_numer),
+        .denominator(div0_denom),
+        .result     (norm0_result),
+        .done       (div0_done)
     );
 
     //-----------------------------------------------------------
@@ -96,13 +96,13 @@ module regression3x3 #(
     assign mul0_b = augmented[0][elim0_col_idx];
 
     fxMul #(.WIDTH(WIDTH), .LATENCY(MUL_LATENCY)) elim0_mul (
-      .clk    (clk),
-      .rst    (rst_n),
-      .start  (mul0_start),
-      .a      (mul0_a),
-      .b      (mul0_b),
-      .result (elim0_result),
-      .done   (mul0_done)
+        .clk    (clk),
+        .rst    (rst_n),
+        .start  (mul0_start),
+        .a      (mul0_a),
+        .b      (mul0_b),
+        .result (elim0_result),
+        .done   (mul0_done)
     );
 
     //-----------------------------------------------------------
@@ -114,18 +114,18 @@ module regression3x3 #(
     logic                    div1_start, div1_done;
 
     always_comb begin
-      div1_numer = augmented[1][norm1_col_idx];
-      div1_denom = augmented[1][1];
+        div1_numer = augmented[1][norm1_col_idx];
+        div1_denom = augmented[1][1];
     end
 
     fxDiv #(.WIDTH(WIDTH), .LATENCY(DIV_LATENCY)) normalize1_div (
-      .clk        (clk),
-      .rst        (rst_n),
-      .start      (div1_start),
-      .numerator  (div1_numer),
-      .denominator(div1_denom),
-      .result     (norm1_result),
-      .done       (div1_done)
+        .clk        (clk),
+        .rst        (rst_n),
+        .start      (div1_start),
+        .numerator  (div1_numer),
+        .denominator(div1_denom),
+        .result     (norm1_result),
+        .done       (div1_done)
     );
 
     //-----------------------------------------------------------
@@ -140,13 +140,13 @@ module regression3x3 #(
     assign mul1_b = augmented[1][elim1_col_idx];
 
     fxMul #(.WIDTH(WIDTH), .LATENCY(MUL_LATENCY)) elim1_mul (
-      .clk    (clk),
-      .rst    (rst_n),
-      .start  (mul1_start),
-      .a      (mul1_a),
-      .b      (mul1_b),
-      .result (elim1_result),
-      .done   (mul1_done)
+        .clk    (clk),
+        .rst    (rst_n),
+        .start  (mul1_start),
+        .a      (mul1_a),
+        .b      (mul1_b),
+        .result (elim1_result),
+        .done   (mul1_done)
     );
 
     
@@ -155,8 +155,6 @@ module regression3x3 #(
     //-----------------------------------------------------------
     logic signed [WIDTH-1:0]    bs_a, bs_b;
     logic [1:0]                 bs_step;
-
-    // separate active & start flags for div (step 0) vs mul (steps 1/2)
     logic                        bs_active;
     logic                        bs_start;
     wire                         bs_done;
@@ -164,13 +162,13 @@ module regression3x3 #(
 
 
     fxMul #(.WIDTH(WIDTH), .LATENCY(MUL_LATENCY)) backsub_mul (
-      .clk    (clk),
-      .rst    (rst_n),
-      .start  (bs_start),
-      .a      (bs_a),
-      .b      (bs_b),
-      .result (bs_result),
-      .done   (bs_done)
+        .clk    (clk),
+        .rst    (rst_n),
+        .start  (bs_start),
+        .a      (bs_a),
+        .b      (bs_b),
+        .result (bs_result),
+        .done   (bs_done)
     );
 
     //-----------------------------------------------------------
@@ -199,10 +197,10 @@ module regression3x3 #(
     //-----------------------------------------------------------
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-        current_state <= S_IDLE;
-      end else begin
-        current_state <= next_state;
-      end
+            current_state <= S_IDLE;
+        end else begin
+            current_state <= next_state;
+        end
     end
 
 
