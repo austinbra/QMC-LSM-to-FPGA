@@ -1,21 +1,17 @@
-// 3×3 regression via Gaussian elimination, pipelined & fixed-point-aware
-
 module regression3x3 #(
     parameter WIDTH         = 32,
     parameter MUL_LATENCY   = 1,
     parameter DIV_LATENCY   = 1
 )(
-    // Clock, reset, start
     input  logic                    clk,
     input  logic                    rst_n, //active low reset
     input  logic                    start,
 
-    // Input matrices
+    // Input matrixs
     input  logic signed [WIDTH-1:0] A_flat [0:8],
     input  logic signed [WIDTH-1:0] B_flat [0:2],
 
-    // Outputs
-    output logic                    done,   // signals when regression is complete
+    output logic                    done,   // signal when regression is done
     output logic signed [WIDTH-1:0] beta [0:2] // solution vector
 );
 
@@ -23,7 +19,7 @@ module regression3x3 #(
     localparam int Qfrac = WIDTH - Qint;
 
 
-    // FSM state definitions
+    // FSM state def
     typedef enum logic [3:0]{
         S_IDLE,
         S_LOAD,
@@ -37,15 +33,14 @@ module regression3x3 #(
         S_DONE
     } state_t;
 
-    // Internal state & next_state
     state_t current_state, next_state;
     
-    // Augmented matrix storage (Q16.16 format)
+    // Augmented matrix where all calc are done on (Q16.16 format)
     logic signed [WIDTH-1:0] augmented [0:2][0:3];
 
 
     //-----------------------------------------------------------
-    // combinationaly pick the row where |augmented[row][0]| is biggest
+    // combinationaly pick the row where first value is abs(biggest)
     //-----------------------------------------------------------
     logic [1:0]                 pivot0_row;
     logic signed [WIDTH-1:0]    tmp;
@@ -68,7 +63,7 @@ module regression3x3 #(
     logic signed [WIDTH-1:0]    div0_numer, div0_denom, norm0_result;
     logic                       div0_start, div0_done;
 
-    // compute numerator & denominator before driving fxDiv
+    // compute numerator & denominator before doing fxDiv
     always_comb begin
         div0_numer = augmented[0][norm0_col_idx];
         div0_denom = augmented[0][0];
