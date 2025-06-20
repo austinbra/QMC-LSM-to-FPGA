@@ -32,7 +32,7 @@ inverseCDF_step1 #(WIDTH, FRAC) step1 (
 logic [WIDTH-1:0] ln_x;
 logic v2a;
 
-fxLogLUT #(WIDTH, FRAC) loglut (
+fxlnLUT #(WIDTH, FRAC) loglut (
     .clk(clk),
     .rst_n(rst_n),
     .valid_in(v1),
@@ -48,14 +48,19 @@ fxMul #(WIDTH, FRAC) mul_neg2 (
     .clk(clk),
     .rst_n(rst_n),
     .a(ln_x),
-    .b(-(2 << FRAC)),       // -2.0 in Q16.16
+    .b($signed(-(32'sd2 << FRAC))),       // -2.0 in Q16.16
     .result(neg2_ln_x)
 );
 
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) v2b <= 0;
-    else v2b <= v2a;
+// Properly delay v2a to account for multiplication pipeline (2 cycles)
+logic [1:0] v2_pipe;
+always_ff @(posedge clk) begin
+    if (!rst_n) 
+        v2_pipe <= 2'b00;
+    else 
+        v2_pipe <= {v2_pipe[0], v2a};
 end
+assign v2b = v2_pipe[1];
 
 logic [WIDTH-1:0] t;
 logic v3;
@@ -69,11 +74,17 @@ fxSqrt #(WIDTH, FRAC) sqrt_unit (
     .valid_out(v3)
 );
 
-// Delay the negate signal to align with t
-logic [2:0] negate_pipe;
-always_ff @(posedge clk or negedge rst_n)
-    if (!rst_n) negate_pipe <= 0;
-    else negate_pipe <= {negate_pipe[1:0], negate};
+// Delay negate signal to align with t  
+/* verilator lint_off UNUSED */
+logic [9:0] negate_pipe;  // 10 stages to align with when fxInvCDF_ZS needs it
+/* verilator lint_on UNUSED */
+
+always_ff @(posedge clk) begin
+    if (!rst_n)
+        negate_pipe <= 10'b0;
+    else
+        negate_pipe <= {negate_pipe[8:0], negate};
+end
 
 // Step 3: Rational approximation (Zelen & Severo)
 logic signed [WIDTH-1:0] z;
@@ -84,7 +95,7 @@ fxInvCDF_ZS #(WIDTH, FRAC) rational (
     .rst_n(rst_n),
     .valid_in(v3),
     .t(t),
-    .negate(negate),
+    .negate(negate_pipe[9]),  // 10 cycles of delay
     .z(z),
     .valid_out(v4)
 );

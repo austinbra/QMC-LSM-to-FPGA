@@ -18,7 +18,7 @@ module fxInvCDF_ZS #(
     // pre determined constants in Q16.16
     localparam  [WIDTH-1:0] C0 = 32'sd164835;   // 2.515517
     localparam [WIDTH-1:0] C1 = 32'sd52584;     // 0.802853
-    localparam [WIDTH-1:0] C2 = 32'sd678;       // 0.010328
+    localparam [WIDTH-1:0] C2 = 32'sd677;       // 0.010328
 
     localparam [WIDTH-1:0] D1 = 32'sd93912;   // 1.432788
     localparam [WIDTH-1:0] D2 = 32'sd12393;   // 0.189269
@@ -26,7 +26,11 @@ module fxInvCDF_ZS #(
 
     logic [WIDTH-1:0] t2, t3;
     logic [WIDTH-1:0] num, den, ratio;
-    logic [WIDTH-1:0] z_unsigned;
+    /* verilator lint_off UNUSED */
+    logic [WIDTH-1:0] z_unsigned_reg;
+    /* verilator lint_on UNUSED */
+    logic signed [WIDTH-1:0] z_reg;
+
 
     // Multipliers
     fxMul #(WIDTH, FRAC) mul_t_t(.clk(clk), .rst_n(rst_n), .a(t), .b(t), .result(t2));    // t^2
@@ -50,19 +54,48 @@ module fxInvCDF_ZS #(
     // Divide numerator by denominator
     fxDiv #(WIDTH, FRAC) div_nd (.clk(clk), .rst_n(rst_n), .num(num), .denom(den), .result(ratio));
 
-    // final z-score: z = t - ratio
-    assign z_unsigned = t - ratio;
-    assign z = negate ? -$signed(z_unsigned) : $signed(z_unsigned);
-
-    // Pipeline delay tracker
-    logic [3:0] valid_pipe;
-    always_ff @(posedge clk or negedge rst_n) begin
+    // Pipeline delay tracker - extended to account for arithmetic pipeline depths
+    logic [8:0] valid_pipe;
+    always_ff @(posedge clk) begin
         if (!rst_n)
-            valid_pipe <= 4'b0000;
+            valid_pipe <= 9'b000000000;
         else
-            valid_pipe <= {valid_pipe[2:0], valid_in};
+            valid_pipe <= {valid_pipe[7:0], valid_in};
     end
 
-    assign valid_out = valid_pipe[3];   // aligned with final z output
+    // Register t input to align with ratio output
+    logic [WIDTH-1:0] t_delayed [0:7];
+    logic negate_delayed [0:7];
+    
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            for (int i = 0; i < 8; i++) begin
+                t_delayed[i] <= 0;
+                negate_delayed[i] <= 0;
+            end
+        end else begin
+            t_delayed[0] <= t;
+            negate_delayed[0] <= negate;
+            for (int i = 1; i < 8; i++) begin
+                t_delayed[i] <= t_delayed[i-1];
+                negate_delayed[i] <= negate_delayed[i-1];
+            end
+        end
+    end
+
+ // Register final subtraction and conditional negation
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            z_unsigned_reg <= 0;
+            z_reg <= 0;
+        end else if (valid_pipe[7]) begin
+            z_unsigned_reg <= t_delayed[7] - ratio;
+            z_reg <= negate_delayed[7] ? -$signed(t_delayed[7] - ratio) : $signed(t_delayed[7] - ratio);
+        end
+    end
+
+    assign z = z_reg;
+
+    assign valid_out = valid_pipe[8];   // aligned with final z output
 
 endmodule

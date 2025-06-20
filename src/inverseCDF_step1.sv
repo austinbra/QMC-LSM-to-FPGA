@@ -18,7 +18,7 @@ module inverseCDF_step1 #(
     // constant for 0.5 in Q16.16
     localparam signed [WIDTH-1:0] HALF = 32'sd32768; // 0.5 in Q16.16
 
-    always_ff @(posedge clk or negedge rst_n) begin
+    always_ff @(posedge clk) begin
         if (!rst_n) begin
             x <= 0;
             negate <= 0;

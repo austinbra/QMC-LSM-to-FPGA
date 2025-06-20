@@ -16,43 +16,53 @@ module fxSqrt #(
 );
 
     // internal state
-    logic [WIDTH-1:0] x_curr, x_next;
+    logic [WIDTH-1:0] x_curr;
     logic [WIDTH-1:0] div_result;
-    logic [1:0] iter;
+    logic [3:0] cycle_count;  // Count cycles for division pipeline
+    logic [1:0] iteration;    // Track Newton-Raphson iterations
     logic busy;
 
     // instantiate division module
     fxDiv #(WIDTH, FRAC) div (
         .clk(clk), .rst_n(rst_n),
-        .numerator(y),
-        .denominator(x_curr),
+        .num(y),
+        .denom(x_curr),
         .result(div_result)
     );
 
-    always_ff @(posedge clk or negedge rst_n) begin
+    always_ff @(posedge clk) begin
         if (!rst_n) begin
             x_curr <= 0;
-            iter <= 0;
+            cycle_count <= 0;
+            iteration <= 0;
             busy <= 0;
-            sqrt_out <= =0;
+            sqrt_out <= 0;
             valid_out <= 0;
         end else begin
             if (valid_in && !busy) begin
-                // start new iteration
+                // start new computation
                 x_curr <= y >> 1;       // initial guess: y / 2
-                iter <= 0;
+                cycle_count <= 0;
+                iteration <= 0;
                 busy <= 1;
                 valid_out <= 0;
             end else if (busy) begin
-                // Newton-Raphson iteration: x_next = 0.5 * (x + y/x)
-                x_next <= (x_curr + div_result) >> 1;
-                x_curr <= x_next;
-                iter <= iter + 1;
-
-                if (iter == ITERATIONS - 1) begin
-                    sqrt_out <= x_next;
-                    valid_out <= 1;
-                    busy <= 0;
+                cycle_count <= cycle_count + 1;
+                
+                // Wait for division pipeline (3 cycles) then update
+                if (cycle_count >= 3) begin
+                    // Newton-Raphson iteration: x_curr = 0.5 * (x + y/x)
+                    x_curr <= (x_curr + div_result) >> 1;
+                    
+                    iteration <= iteration + 1;
+                    cycle_count <= 0;  // Reset for next iteration
+                    
+                    // Do 2 iterations for better accuracy
+                    if (iteration >= 1) begin
+                        sqrt_out <= (x_curr + div_result) >> 1;
+                        valid_out <= 1;
+                        busy <= 0;
+                    end
                 end else begin
                     valid_out <= 0;
                 end
