@@ -1,56 +1,75 @@
-// pipelinedRegression3x3_tb.cpp
+
+// Drives one identity‐matrix solve through the pipeline and checks β=[1,2,3].
+
 #include "VpipelinedRegression3x3.h"
 #include "verilated.h"
 #include <iostream>
-#include <cstdint>
 #include <cassert>
+#include <cmath>
 
 int main(int argc, char **argv) {
     Verilated::commandArgs(argc, argv);
     auto *tb = new VpipelinedRegression3x3;
 
-    const int WIDTH = 32;
-    const int QINT  = 16;
+    // Constants must match your RTL parameters
+    const int WIDTH   = 32;
+    const int QINT    = 16;
+    const double SCALE = double(1 << QINT);
 
-    // Helper: convert real to Q16.16
-    auto to_fixed = [&](double x) {
-        return int32_t(x * (1<<QINT));
+    // Helpers to convert between real and Q16.16
+    auto to_fixed = [&](double x) -> int32_t {
+        return int32_t(std::round(x * SCALE));
     };
-    auto to_real  = [&](int32_t x) {
-        return double(x) / (1<<QINT);
+    auto to_real  = [&](int32_t x) -> double {
+        return double(x) / SCALE;
     };
 
+    // ------------------------------------------------------------------------
     // INITIALIZE
+    // ------------------------------------------------------------------------
     tb->clk      = 0;
     tb->rst_n    = 0;
     tb->valid_in = 0;
-    for (int i = 0; i < 9; ++i) tb->A_flat[i] = 0;
-    for (int i = 0; i < 3; ++i) tb->B_flat[i] = 0;
+    // zero out the arrays
+    for (int i = 0; i < 9;  ++i) tb->A_flat[i] = 0;
+    for (int i = 0; i < 3;  ++i) tb->B_flat[i] = 0;
     tb->eval();
 
-    // RESET: hold low for 2 cycles
-    for (int i = 0; i < 4; ++i) {
+    // ------------------------------------------------------------------------
+    // RESET: hold rst_n low for 2 full cycles
+    // ------------------------------------------------------------------------
+    for (int cycle = 0; cycle < 4; ++cycle) {
         tb->clk = !tb->clk; tb->eval();
     }
-    tb->rst_n = 1;  // release reset
+    // release reset
+    tb->rst_n = 1;
     tb->clk   = !tb->clk; tb->eval();
     tb->clk   = !tb->clk; tb->eval();
 
-    // APPLY TEST VECTOR: Identity A and B=[1,2,3]
+    // ------------------------------------------------------------------------
+    // APPLY TEST VECTOR: A = I₃, B = [1,2,3] in Q16.16
+    // ------------------------------------------------------------------------
     for (int i = 0; i < 9; ++i) {
-        tb->A_flat[i] = to_fixed((i/3 == i%3) ? 1.0 : 0.0);
+        int row = i / 3, col = i % 3;
+        tb->A_flat[i] = to_fixed(row == col ? 1.0 : 0.0);
     }
     for (int i = 0; i < 3; ++i) {
-        tb->B_flat[i] = to_fixed(double(i+1));
+        tb->B_flat[i] = to_fixed(double(i + 1));
     }
 
+    tb->eval();
+
+    // ------------------------------------------------------------------------
     // PULSE valid_in for exactly one cycle
+    // ------------------------------------------------------------------------
     tb->valid_in = 1;
     tb->clk      = !tb->clk; tb->eval();
     tb->clk      = !tb->clk; tb->eval();
     tb->valid_in = 0;
 
-    // WAIT for valid_out
+    // ------------------------------------------------------------------------
+    // WAIT for valid_out (with timeout)
+    // ------------------------------------------------------------------------
     const int MAX_CYCLES = 1000;
     int cycle = 0;
     while (!tb->valid_out && cycle < MAX_CYCLES) {
@@ -59,20 +78,24 @@ int main(int argc, char **argv) {
         ++cycle;
     }
     if (!tb->valid_out) {
-        std::cerr << "FAIL: timed out waiting for valid_out\n";
+        std::cerr << "ERROR: timed out waiting for valid_out\n";
         return 1;
     }
 
-    // READ AND DISPLAY betas
+    // ------------------------------------------------------------------------
+    // READ & CHECK β
+    // ------------------------------------------------------------------------
     double b0 = to_real(int32_t(tb->beta[0]));
     double b1 = to_real(int32_t(tb->beta[1]));
     double b2 = to_real(int32_t(tb->beta[2]));
-    std::cout << "beta = [" << b0 << ", " << b1 << ", " << b2 << "]\n";
 
-    // CHECK against expected [1,2,3]
-    assert(fabs(b0-1.0) < 1e-3);
-    assert(fabs(b1-2.0) < 1e-3);
-    assert(fabs(b2-3.0) < 1e-3);
+    std::cout << "Got beta = [" 
+              << b0 << ", " << b1 << ", " << b2 << "]\n";
+
+    // tolerance ±1 LSB
+    assert(std::fabs(b0 - 1.0) < 1e-3);
+    assert(std::fabs(b1 - 2.0) < 1e-3);
+    assert(std::fabs(b2 - 3.0) < 1e-3);
     std::cout << "PASS\n";
 
     delete tb;
