@@ -35,6 +35,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
   	//-------------------------------------------------------------------
     // Stage 0 : get inputs
     //-------------------------------------------------------------------
+	//mat0[i][j] = A_flat[i∗3+j], mat0[i][3] = B_flat[i]
 
     always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n)
@@ -52,7 +53,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
   	//-------------------------------------------------------------------
     // Stage‑1 : pivot row 0
     //-------------------------------------------------------------------
-
+	// |largest| first actual value between rows 0,1,2
     logic [1:0] pivot0_row;
     always_comb begin
 		pivot0_row = 0;
@@ -77,7 +78,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 						mat1[i][j] <= mat0[pivot0_row][j];
 
 					default:
-						if(i == pivot0_row)
+						if (i[1:0] == pivot0_row)
 							mat1[i][j] <= mat0[0][j];
 						else
 							mat1[i][j] <= mat0[i][j];//whatever
@@ -90,30 +91,38 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     //-------------------------------------------------------------------
     // Stage 2 : normalize row‑0 (4 div)
     //-------------------------------------------------------------------
-
+	//mat2[0][c]= mat1[0][0] / mat1[0][c], mat2[i][c] = mat1[i][c] (for rows 1,2)
     logic signed [WIDTH-1:0] div0_num[0:3], div0_den[0:3], div0_res[0:3];
-    logic        [3:0]       div0_done;
+    logic [3:0] div0_done;
 
-    generate for(genvar g = 0; g < 4; ++g) begin:DIV0
-		logic signed [2 * WIDTH - 1 : 0] num64_ext;
+    generate //4 parallel computed cals cuz of generate
+		for (genvar g = 0; g < 4; ++g) begin: DIV0
 
-		assign num64_ext = $signed({{WIDTH{mat1[0][g][WIDTH - 1]}}, mat1[0][g]}) <<< QFRAC;
-		assign div0_num[g] = num64_ext[WIDTH + QFRAC - 1 : QFRAC];
-		assign div0_den[g] = mat1[0][0];
+			/* verilator lint_off UNUSED */
+			logic signed [2 * WIDTH - 1 : 0] num64_ext;
+			/* verilator lint_on UNUSED */
+			/* verilator lint_off WIDTH */
+			assign num64_ext = $signed(mat1[0][g]) <<< QFRAC; // move into the int area for fix point div
+			/* verilator lint_on WIDTH */
+			assign div0_num[g] = num64_ext[WIDTH + QFRAC - 1 : QFRAC];
+			assign div0_den[g] = mat1[0][0];
 
-		fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) d0(
-			.clk(clk),
-			.rst_n(rst_n),
-			.start(v1),
-			.numerator(div0_num[g]),
-			.denominator(div0_den[g]),
-			.result(div0_res[g]),
-			.done(div0_done[g]));
-    end endgenerate
+			fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) d0(
+				.clk(clk),
+				.rst_n(rst_n),
+				.start(v1),
+				.numerator(div0_num[g]),
+				.denominator(div0_den[g]),
+				.result(div0_res[g]),
+				.done(div0_done[g]));
+    	end
+	endgenerate
 
     always_ff @(posedge clk or negedge rst_n) begin
-		if (!rst_n) v2 <= 0; else begin
-			v2 <= &div0_done;
+		if (!rst_n)
+			v2 <= 0;
+		else begin
+			v2 <= &div0_done;//if all divisions are complete
 
 			for (int i = 0; i < 3; ++i)
 				for (int j = 0; j < 4; ++j)
@@ -122,10 +131,11 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     end
 
     //-------------------------------------------------------------------
-    // Stage‑3 : eliminate col‑0 (8 mul)
+    // Stage 3 : eliminate col‑0 (8 mul)
     //-------------------------------------------------------------------
+	//new_row1[c] = old_row1[c] − row0[0] * row0[c], new_row2[c] = old_row2[c] − row1[0] * row0[c]
 
-    logic signed [WIDTH-1:0] mul0_r0[0:3], mul0_r1[0:3];
+    logic signed [WIDTH-1 : 0] mul0_r0[0:3], mul0_r1[0:3];
     logic [3:0] mul0_done_r0, mul0_done_r1;
 
     generate for (genvar c = 0; c < 4; c++) begin: MUL0
@@ -165,7 +175,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     //-------------------------------------------------------------------
     // Stage‑4 : pivot row‑1
     //-------------------------------------------------------------------
-
+	// |largest| first actual value between rows 1,2
     logic[1:0] pivot1_row;
 
     always_comb begin
@@ -195,13 +205,17 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     end
 
     //-------------------------------------------------------------------
-    // Stage‑5 : normalize row‑1 (3 div)
+    // Stage 5 : normalize row‑1 (3 div)
     //-------------------------------------------------------------------
+	//mat5[1][c] = mat4[1][1] / mat4[1][c], mat5[i][c] = mat4[i][c] (for rows 0,2), mat5[1][0] = mat4[1][0]
     logic signed [WIDTH-1:0] div1_num[1:3],div1_den[1:3],div1_res[1:3];
     logic [3:1] div1_done;
 
     generate for (genvar g = 1; g < 4; g++) begin:DIV1
-		logic signed [2 * WIDTH-1:0] num64_ext1;
+
+		/* verilator lint_off UNUSED */
+		logic signed [2 * WIDTH - 1 : 0] num64_ext1;
+		/* verilator lint_on UNUSED */
 
 		assign num64_ext1 = $signed({{WIDTH{mat4[1][g][WIDTH - 1]}}, mat4[1][g]}) <<< QFRAC;
 		assign div1_num[g] = num64_ext1[WIDTH + QFRAC - 1 : QFRAC];
@@ -233,9 +247,9 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 	end
 
     //-------------------------------------------------------------------
-    // Stage‑6 : eliminate col‑1 in row‑2 (combinational)
+    // Stage‑6 : eliminate col‑1 in row‑2 
     //-------------------------------------------------------------------
-
+	//mat6[2][c] = mat5[2][c] − mat5[2][1] * mat5[1][c], mat6[i][c] = mat5[i][c] (for rows 0,1), mat6[2][0] = mat5[2][0]
     always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n)
 			v6 <= 0;
@@ -258,8 +272,9 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     end
 
     //-------------------------------------------------------------------
-    // Stage‑7 : back‑substitution (single‑cycle)
+    // Stage‑7 : back‑substitution 
     //-------------------------------------------------------------------
+	//solve for betas cutting down on calculation
 
     always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n) begin
@@ -272,8 +287,13 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 			v7 <= v6;
 			valid_out<=v7;
 			if (v7) begin
+				/* verilator lint_off UNUSED */
 				logic signed [2*WIDTH-1:0] num64, den64, div64, prod64;
+				/* verilator lint_on UNUSED */
 				logic signed [WIDTH-1:0] bt2, bt1, bt0;
+
+				//{N{expr}} means “make N copies of expr and stick them together"
+				//{ … , … } just glues two vectors end-to-end
 
 				// beta2
 				num64 = $signed({{WIDTH{mat6[2][3][WIDTH-1]}}, mat6[2][3]}) <<< QFRAC;
