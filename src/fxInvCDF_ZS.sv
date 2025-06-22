@@ -23,79 +23,77 @@ module fxInvCDF_ZS #(
     localparam [WIDTH-1:0] D1 = 32'sd93912;   // 1.432788
     localparam [WIDTH-1:0] D2 = 32'sd12393;   // 0.189269
     localparam [WIDTH-1:0] D3 = 32'sd86;      // 0.001308
-
-    logic [WIDTH-1:0] t2, t3;
-    logic [WIDTH-1:0] num, den, ratio;
-    /* verilator lint_off UNUSED */
-    logic [WIDTH-1:0] z_unsigned_reg;
-    /* verilator lint_on UNUSED */
-    logic signed [WIDTH-1:0] z_reg;
+    localparam signed [WIDTH-1:0] ONE_Q16 = 32'sh0001_0000; // 1.0 in Q16.16
 
 
     // Multipliers
-    fxMul #(WIDTH, FRAC) mul_t_t(.clk(clk), .rst_n(rst_n), .a(t), .b(t), .result(t2));    // t^2
-    fxMul #(WIDTH, FRAC) mult_t_t2(.clk(clk), .rst_n(rst_n), .a(t), .b(t2), .result(t3));  // t^3
+    logic [WIDTH-1:0] t2, t3;
+    fxMul_always #(WIDTH, FRAC) mul_t_t(.clk(clk), .rst_n(rst_n), .a(t), .b(t), .result(mul1_out));    // t^2
+    fxMul_always #(WIDTH, FRAC) mult_t_t2(.clk(clk), .rst_n(rst_n), .a(t), .b(t2), .result(mul2_out));  // t^3
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            t2  <= '0;
+            t3  <= '0;
+        end else begin
+            t2  <= mul1_out;
+            t3  <= mul2_out;
+        end
+    end
 
     // Numerator: C0 + C1 * t + C2 * t2
-    logic [WIDTH-1:0] c1t, c2t2;
-    fxMul #(WIDTH, FRAC) mul_c1t(.clk(clk), .rst_n(rst_n), .a(C1), .b(t), .result(c1t));
-    fxMul #(WIDTH, FRAC) mul_c2t2(.clk(clk), .rst_n(rst_n), .a(C2), .b(t2), .result(c2t2));
-
-    assign num = C0 + c1t + c2t2;
-
+    logic [WIDTH-1:0] c1t, c2t2, num;
+    fxMul_always #(WIDTH, FRAC) mul_c1t(.clk(clk), .rst_n(rst_n), .a(C1), .b(t), .result(c1t));
+    fxMul_always #(WIDTH, FRAC) mul_c2t2(.clk(clk), .rst_n(rst_n), .a(C2), .b(t2), .result(c2t2));
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            num <= 0;
+        end else begin
+            num <= C0 + c1t + c2t2;
+        end
+    end
+    
     // Denominator: 1 + D1 * t + D2 * t2 + D3 * t3
-    logic [WIDTH-1:0] d1t, d2t2, d3t3;
-    fxMul #(WIDTH, FRAC) mul_d1t(.clk(clk), .rst_n(rst_n), .a(D1), .b(t), .result(d1t));
-    fxMul #(WIDTH, FRAC) mul_d2t2(.clk(clk), .rst_n(rst_n), .a(D2), .b(t2), .result(d2t2));
-    fxMul #(WIDTH, FRAC) mul_d3t3(.clk(clk), .rst_n(rst_n), .a(D3), .b(t3), .result(d3t3));
-
-    assign den = (1 << FRAC) + d1t + d2t2 + d3t3;   // "1" in Q16.16
+    logic [WIDTH-1:0] d1t, d2t2, d3t3, den;
+    fxMul_always #(WIDTH, FRAC) mul_d1t(.clk(clk), .rst_n(rst_n), .a(D1), .b(t), .result(d1t));
+    fxMul_always #(WIDTH, FRAC) mul_d2t2(.clk(clk), .rst_n(rst_n), .a(D2), .b(t2), .result(d2t2));
+    fxMul_always #(WIDTH, FRAC) mul_d3t3(.clk(clk), .rst_n(rst_n), .a(D3), .b(t3), .result(d3t3));
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            den <= 0;
+        end else begin
+            den <= ONE_Q16 + d1t + d2t2 + d3t3;
+        end
+    end
 
     // Divide numerator by denominator
-    fxDiv #(WIDTH, FRAC) div_nd (.clk(clk), .rst_n(rst_n), .num(num), .denom(den), .result(ratio));
-
-    // Pipeline delay tracker - extended to account for arithmetic pipeline depths
-    logic [8:0] valid_pipe;
-    always_ff @(posedge clk) begin
-        if (!rst_n)
-            valid_pipe <= 9'b000000000;
-        else
-            valid_pipe <= {valid_pipe[7:0], valid_in};
-    end
-
-    // Register t input to align with ratio output
-    logic [WIDTH-1:0] t_delayed [0:7];
-    logic negate_delayed [0:7];
+    logic [WIDTH-1:0] ratio;
+    fxDiv_always #(WIDTH, FRAC) div_nd (.clk(clk), .rst_n(rst_n), .numerator(num), .denominator(den), .result(ratio));
     
-    always_ff @(posedge clk) begin
-        if (!rst_n) begin
-            for (int i = 0; i < 8; i++) begin
-                t_delayed[i] <= 0;
-                negate_delayed[i] <= 0;
-            end
-        end else begin
-            t_delayed[0] <= t;
-            negate_delayed[0] <= negate;
-            for (int i = 1; i < 8; i++) begin
-                t_delayed[i] <= t_delayed[i-1];
-                negate_delayed[i] <= negate_delayed[i-1];
-            end
-        end
+    logic signed [WIDTH-1:0] z_raw;
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n)
+        z_raw <= '0;
+      else
+        z_raw <= t - ratio;
     end
 
- // Register final subtraction and conditional negation
-    always_ff @(posedge clk) begin
-        if (!rst_n) begin
-            z_unsigned_reg <= 0;
-            z_reg <= 0;
-        end else if (valid_pipe[7]) begin
-            z_unsigned_reg <= t_delayed[7] - ratio;
-            z_reg <= negate_delayed[7] ? -$signed(t_delayed[7] - ratio) : $signed(t_delayed[7] - ratio);
-        end
+    // change the sign
+    always_ff @(posedge clk or negedge rst_n) begin
+      if (!rst_n)
+        z <= '0;
+      else
+        z <= negate ? -z_raw : z_raw;
     end
 
-    assign z = z_reg;
-
-    assign valid_out = valid_pipe[8];   // aligned with final z output
+    // 6 stage pipeline + 1 for init
+    logic [6:0] vpipe;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)     
+            vpipe <= 7'b0;
+        else
+            vpipe <= {vpipe[5:0], valid_in};//on each clock shift left by one and bring in the current valid_in bit at the least sig bit
+        valid_out <= vpipe[6]; //when 6 cycles are done this is high
+    end
 
 endmodule
