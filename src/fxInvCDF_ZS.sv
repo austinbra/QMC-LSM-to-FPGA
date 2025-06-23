@@ -4,8 +4,8 @@
 
 module fxInvCDF_ZS #(
     parameter WIDTH = 32,
-    parameter FRAC = 16
-)(
+    parameter QINT = 16
+    )(
     input logic clk,
     input logic rst_n,
     input logic valid_in,
@@ -28,8 +28,8 @@ module fxInvCDF_ZS #(
 
     // Multipliers
     logic [WIDTH-1:0] t2, t3;
-    fxMul_always #(WIDTH, FRAC) mul_t_t(.clk(clk), .rst_n(rst_n), .a(t), .b(t), .result(mul1_out));    // t^2
-    fxMul_always #(WIDTH, FRAC) mult_t_t2(.clk(clk), .rst_n(rst_n), .a(t), .b(t2), .result(mul2_out));  // t^3
+    fxMul_always #(WIDTH, QINT) mul_t_t(.clk(clk), .rst_n(rst_n), .a(t), .b(t), .result(mul1_out));    // t^2
+    fxMul_always #(WIDTH, QINT) mult_t_t2(.clk(clk), .rst_n(rst_n), .a(t), .b(t2), .result(mul2_out));  // t^3
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -43,8 +43,8 @@ module fxInvCDF_ZS #(
 
     // Numerator: C0 + C1 * t + C2 * t2
     logic [WIDTH-1:0] c1t, c2t2, num;
-    fxMul_always #(WIDTH, FRAC) mul_c1t(.clk(clk), .rst_n(rst_n), .a(C1), .b(t), .result(c1t));
-    fxMul_always #(WIDTH, FRAC) mul_c2t2(.clk(clk), .rst_n(rst_n), .a(C2), .b(t2), .result(c2t2));
+    fxMul_always #(WIDTH, QINT) mul_c1t(.clk(clk), .rst_n(rst_n), .a(C1), .b(t), .result(c1t));
+    fxMul_always #(WIDTH, QINT) mul_c2t2(.clk(clk), .rst_n(rst_n), .a(C2), .b(t2), .result(c2t2));
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             num <= 0;
@@ -55,9 +55,9 @@ module fxInvCDF_ZS #(
     
     // Denominator: 1 + D1 * t + D2 * t2 + D3 * t3
     logic [WIDTH-1:0] d1t, d2t2, d3t3, den;
-    fxMul_always #(WIDTH, FRAC) mul_d1t(.clk(clk), .rst_n(rst_n), .a(D1), .b(t), .result(d1t));
-    fxMul_always #(WIDTH, FRAC) mul_d2t2(.clk(clk), .rst_n(rst_n), .a(D2), .b(t2), .result(d2t2));
-    fxMul_always #(WIDTH, FRAC) mul_d3t3(.clk(clk), .rst_n(rst_n), .a(D3), .b(t3), .result(d3t3));
+    fxMul_always #(WIDTH, QINT) mul_d1t(.clk(clk), .rst_n(rst_n), .a(D1), .b(t), .result(d1t));
+    fxMul_always #(WIDTH, QINT) mul_d2t2(.clk(clk), .rst_n(rst_n), .a(D2), .b(t2), .result(d2t2));
+    fxMul_always #(WIDTH, QINT) mul_d3t3(.clk(clk), .rst_n(rst_n), .a(D3), .b(t3), .result(d3t3));
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             den <= 0;
@@ -68,7 +68,7 @@ module fxInvCDF_ZS #(
 
     // Divide numerator by denominator
     logic [WIDTH-1:0] ratio;
-    fxDiv_always #(WIDTH, FRAC) div_nd (.clk(clk), .rst_n(rst_n), .numerator(num), .denominator(den), .result(ratio));
+    fxDiv_always #(WIDTH, QINT) div_nd (.clk(clk), .rst_n(rst_n), .numerator(num), .denominator(den), .result(ratio));
     
     logic signed [WIDTH-1:0] z_raw;
     always_ff @(posedge clk or negedge rst_n) begin
