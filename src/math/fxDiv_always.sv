@@ -1,17 +1,29 @@
 module fxDiv_always #(
-  parameter WIDTH=32, QINT=16, QFRAC=WIDTH-QINT, LATENCY=2
+    parameter WIDTH = 32,
+    parameter QINT = 16,
+    parameter QFRAC = WIDTH - QINT,
+    parameter LATENCY = 3
 )(
-  input  logic clk, rst_n,
-  input  logic signed [WIDTH-1:0] numerator, denominator,
-  output logic signed [WIDTH-1:0] result
+    input  logic clk,
+    input  logic rst_n,
+    input  logic valid_in,     
+    input  logic signed [WIDTH-1:0] numerator,
+    input  logic signed [WIDTH-1:0] denominator,
+    output logic valid_out,
+    output logic signed [WIDTH-1:0] result
 );
-  logic done_dummy;
-  fxMul #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(LATENCY)) core(
-    .clk(clk), .rst_n(rst_n),
-    .start(1'b1),// always asserted
-    .numerator(a),
-    .denominator(b),
-    .result(result),
-    .done(done_dummy) // ignored
-  );
+    logic core_valid_out;
+    always_ff @(posedge clk)
+        if (valid_in) $display("DIV: %0t  num=%0d  den=%0d", $time, numerator, denominator);
+
+    fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(LATENCY)) core(
+        .clk(clk),
+        .rst_n(rst_n),
+        .valid_in(valid_in),// always asserted
+        .numerator(numerator),
+        .denominator(denominator),
+        .result(result),
+        .valid_out(core_valid_out) // ignored
+    );
+    assign valid_out = core_valid_out;
 endmodule

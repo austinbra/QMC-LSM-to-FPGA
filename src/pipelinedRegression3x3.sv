@@ -19,6 +19,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     function automatic logic signed [WIDTH-1:0] abs_val(input logic signed [WIDTH-1:0] x);
       	abs_val = x[WIDTH-1] ? -x : x;
     endfunction
+	
 
     //-----------------------------------------------------------
     // Matrix registers (augmented 3×4) per stage
@@ -110,11 +111,11 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 			fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) d0(
 				.clk(clk),
 				.rst_n(rst_n),
-				.start(v1),
+				.valid_in(v1),
 				.numerator(div0_num[g]),
 				.denominator(div0_den[g]),
 				.result(div0_res[g]),
-				.done(div0_done[g]));
+				.valid_out(div0_done[g]));
     	end
 	endgenerate
 
@@ -142,20 +143,20 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
       fxMul #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_LATENCY)) m0(
         .clk(clk),
 		.rst_n(rst_n),
-		.start(v2),
+		.valid_in(v2),
         .a(mat2[1][0]),
 		.b(mat2[0][c]),
 		.result(mul0_r0[c]),
-		.done(mul0_done_r0[c]));
+		.valid_out(mul0_done_r0[c]));
 
       fxMul #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_LATENCY)) m1(
         .clk(clk),
 		.rst_n(rst_n),
-		.start(v2),
+		.valid_in(v2),
         .a(mat2[2][0]),
 		.b(mat2[0][c]),
 		.result(mul0_r1[c]),
-		.done(mul0_done_r1[c]));
+		.valid_out(mul0_done_r1[c]));
     end endgenerate
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -224,11 +225,11 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 		fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) d1(
 			.clk(clk),
 			.rst_n(rst_n),
-			.start(v4),
+			.valid_in(v4),
 			.numerator(div1_num[g]),
 			.denominator(div1_den[g]),
 			.result(div1_res[g]),
-			.done(div1_done[g]));
+			.valid_out(div1_done[g]));
 		end endgenerate
 
 	always_ff @(posedge clk or negedge rst_n) begin
@@ -250,72 +251,107 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     // Stage‑6 : eliminate col‑1 in row‑2 
     //-------------------------------------------------------------------
 	//mat6[2][c] = mat5[2][c] − mat5[2][1] * mat5[1][c], mat6[i][c] = mat5[i][c] (for rows 0,1), mat6[2][0] = mat5[2][0]
+	logic v6_done;
     always_ff @(posedge clk or negedge rst_n) begin
-		if (!rst_n)
-			v6 <= 0;
-		else begin
+		if (!rst_n) begin
+			v6 <= 1'b0;
+			v6_done <= 1'b0;
+		end else begin
 			v6 <= v5;
-			// pass rows 0 & 1
-			for(int j = 0; j < 4; ++j) begin
+			v6_done <= v6;
+
+			// pass rows 0 & 1 straight through
+			for (int j = 0; j < 4; ++j) begin
 				mat6[0][j] <= mat5[0][j];
 				mat6[1][j] <= mat5[1][j];
 			end
-			
-			mat6[2][0]<=mat5[2][0];
-			for(int j = 1; j < 4; ++j) begin
-				logic signed [2 * WIDTH - 1 : 0] prod64;
-				prod64 = $signed({{WIDTH{mat5[2][1][WIDTH-1]}}, mat5[2][1]}) * $signed({{WIDTH{mat5[1][j][WIDTH-1]}}, mat5[1][j]});
-				prod64 = prod64 >>> QFRAC; // undo scale
-				mat6[2][j] <= mat5[2][j] - prod64[WIDTH + QFRAC - 1 : QFRAC];
+
+			mat6[2][0] <= mat5[2][0];
+
+			for (int j = 1; j < 4; ++j) begin
+				logic signed [2*WIDTH-1:0] prod64;
+				prod64 = $signed(mat5[2][1]) * $signed(mat5[1][j]);
+				prod64 = prod64 >>> QFRAC;               // undo scale
+				mat6[2][j] <= mat5[2][j] - prod64[WIDTH+QFRAC-1 : QFRAC];
 			end
 		end
-    end
+	end
 
     //-------------------------------------------------------------------
-    // Stage‑7 : back‑substitution 
+    // Stage‑7 : back subs 
     //-------------------------------------------------------------------
-	//solve for betas cutting down on calculation
+	logic v7a;
+    logic signed [WIDTH-1:0] bt2;
+    fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_b2 (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .valid_in  (v6_done),
+      .numerator (mat6[2][3] >>> QFRAC),
+      .denominator(mat6[2][2] >>> QFRAC),
+      .valid_out (v7a),
+      .result    (bt2)
+    );
+
+    //beta[1] = (mat6[1][3] – mat6[1][2]*beta[2]) / mat6[1][1]
+    logic v7b1, v7b;
+	logic signed [WIDTH-1:0] prod12, bt1;
+
+	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul12(
+		.clk(clk),
+		.rst_n(rst_n),
+		.valid_in(v7a),
+		.a(mat6[1][2]),
+		.b(bt2),
+		.valid_out(v7b1),
+		.result(prod12)
+	);
+
+	fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_b1(
+		.clk(clk),
+		.rst_n(rst_n),
+		.valid_in(v7b1),
+		.numerator(($signed(mat6[1][3]) - prod12) <<< QFRAC), 
+		.denominator(mat6[1][1]),
+		.valid_out(v7b),
+		.result(bt1)
+	);
+
+
+	// beta[0] = (beta[0] – mat6[0][1]*beta[1]) / mat6[0][0]
+	// -------------------------------------
+	logic v7c1, v7c;
+	logic signed [WIDTH-1:0] prod01, bt0;
+
+	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul01 (
+		.clk(clk),
+		.rst_n(rst_n),
+		.valid_in(v7b),
+		.a(mat6[0][1]),
+		.b(bt1),
+		.valid_out (v7c1),
+		.result(prod01)
+	);
+
+	fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_b0 (
+		.clk(clk),
+		.rst_n (rst_n),
+		.valid_in(v7c1),
+		.numerator(($signed(mat6[0][3]) - prod01) <<< QFRAC),  // <<< fixed
+		.denominator(mat6[0][0]),
+		.valid_out(v7c),
+		.result(bt0)
+	);
 
     always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n) begin
-			v7 <= 0;
-			valid_out <= 0;
-			beta[0] <= 0;
-			beta[1] <= 0;
-			beta[2] <= 0;
+			beta[0] <= '0;
+			beta[1] <= '0;
+			beta[2] <= '0;
+			valid_out <= 1'b0;
 		end else begin
-			v7 <= v6;
-			valid_out<=v7;
-			if (v7) begin
-				/* verilator lint_off UNUSED */
-				logic signed [2*WIDTH-1:0] num64, den64, div64, prod64;
-				/* verilator lint_on UNUSED */
-				logic signed [WIDTH-1:0] bt2, bt1, bt0;
-
-				//{N{expr}} means “make N copies of expr and stick them together"
-				//{ … , … } just glues two vectors end-to-end
-
-				// beta2
-				num64 = $signed({{WIDTH{mat6[2][3][WIDTH-1]}}, mat6[2][3]}) <<< QFRAC;
-				den64 = $signed({{WIDTH{mat6[2][2][WIDTH-1]}}, mat6[2][2]});
-				div64 = num64/den64;
-				bt2 = div64[WIDTH-1:0];
-
-				// beta1
-				prod64 = $signed({{WIDTH{mat6[1][2][WIDTH-1]}},mat6[1][2]}) * $signed({{WIDTH{bt2[WIDTH-1]}},bt2}) >>> QFRAC;
-				num64  = ($signed({{WIDTH{mat6[1][3][WIDTH-1]}},mat6[1][3]}) - prod64) <<< QFRAC;
-				den64  = $signed({{WIDTH{mat6[1][1][WIDTH-1]}},mat6[1][1]});
-				div64  = num64/den64;
-				bt1 = div64[WIDTH-1:0];
-
-				// beta0
-				prod64 = $signed({{WIDTH{mat6[0][1][WIDTH-1]}}, mat6[0][1]}) * $signed({{WIDTH{bt1[WIDTH-1]}}, bt1}) >>> QFRAC;
-				num64  = ($signed({{WIDTH{mat6[0][3][WIDTH-1]}}, mat6[0][3]}) - prod64) <<< QFRAC;
-				den64  = $signed({{WIDTH{mat6[0][0][WIDTH-1]}}, mat6[0][0]});
-				div64  = num64/den64;
-				bt0 = div64[WIDTH-1:0];
-
-				beta[2] <= bt2;
+			valid_out <= v7c;
+			if (v7c) begin
+				beta[2] <= bt2 << QFRAC;
 				beta[1] <= bt1;
 				beta[0] <= bt0;
 			end

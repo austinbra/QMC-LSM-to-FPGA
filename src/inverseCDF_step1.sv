@@ -1,9 +1,8 @@
-//-----------------------------------------------------------
 // Convert sobol sequence number to x ∈ (0,0.5]
-//-----------------------------------------------------------
 module inverseCDF_step1 #(
     parameter WIDTH = 32,
-    parameter FRAC = 16
+    parameter QINT = 16,
+    parameter int QFRAC = WIDTH - QINT
 )(
     input logic clk,
     input logic rst_n,

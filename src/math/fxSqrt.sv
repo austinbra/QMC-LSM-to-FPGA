@@ -1,75 +1,52 @@
-//-----------------------------------------------------------
 // approximates square root using newton-raphson algorithm
-//-----------------------------------------------------------
 module fxSqrt #(
     parameter WIDTH = 32,
-    parameter FRAC = 16,
-    parameter ITERATIONS = 3
+    parameter QINT = 16,
+    parameter LATENCY = 4
 )(
-    input logic clk,
-    input logic rst_n,
-    input logic valid_in,
-    input logic [WIDTH-1:0] y,      // input Q16.16
-
+    input  logic clk,
+    input  logic rst_n,
+    input  logic valid_in,
+    input  logic [WIDTH-1:0] y,
     output logic valid_out,
     output logic [WIDTH-1:0] sqrt_out
 );
 
-    // internal state
-    logic [WIDTH-1:0] x_curr;
-    logic [WIDTH-1:0] div_result;
-    logic [3:0] cycle_count;  // Count cycles for division pipeline
-    logic [1:0] iteration;    // Track Newton-Raphson iterations
-    logic busy;
+    logic [WIDTH-1:0] pipe_x   [0:LATENCY];
+    logic [WIDTH-1:0] pipe_div [0:LATENCY];
+    logic vpipe [0:LATENCY];
 
-    // instantiate division module
-    fxDiv #(WIDTH, FRAC) div (
-        .clk(clk), .rst_n(rst_n),
+    fxDiv_always #(WIDTH, QINT, QFRAC) div (
+        .clk(clk),
+        .rst_n(rst_n),
         .num(y),
-        .denom(x_curr),
-        .result(div_result)
+        .denom(pipe_x[0]),
+        .result(pipe_div[0])
     );
 
-    always_ff @(posedge clk) begin
+    // init x_curr guess on pipe_x[0]
+    // shift both x and div through the pipeline
+    always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            x_curr <= 0;
-            cycle_count <= 0;
-            iteration <= 0;
-            busy <= 0;
-            sqrt_out <= 0;
-            valid_out <= 0;
+            for (int i = 0; i <= LATENCY; i++) begin
+                pipe_x[i]   <= 0;
+                pipe_div[i] <= 0;
+                vpipe[i]    <= 0;
+            end
         end else begin
-            if (valid_in && !busy) begin
-                // start new computation
-                x_curr <= y >> 1;       // initial guess: y / 2
-                cycle_count <= 0;
-                iteration <= 0;
-                busy <= 1;
-                valid_out <= 0;
-            end else if (busy) begin
-                cycle_count <= cycle_count + 1;
-                
-                // Wait for division pipeline (3 cycles) then update
-                if (cycle_count >= 3) begin
-                    // Newton-Raphson iteration: x_curr = 0.5 * (x + y/x)
-                    x_curr <= (x_curr + div_result) >> 1;
-                    
-                    iteration <= iteration + 1;
-                    cycle_count <= 0;  // Reset for next iteration
-                    
-                    // Do 2 iterations for better accuracy
-                    if (iteration >= 1) begin
-                        sqrt_out <= (x_curr + div_result) >> 1;
-                        valid_out <= 1;
-                        busy <= 0;
-                    end
-                end else begin
-                    valid_out <= 0;
-                end
-            end else begin
-                valid_out <= 0;
+            // stage 0 loads init guess when valid_in
+            vpipe[0]  <= valid_in;
+            pipe_x[0] <= valid_in ? (y >> 1) : pipe_x[0]; // initial guess
+
+            // shift everything in pipeline
+            for (int i = 1; i <= LATENCY; ++i) begin
+                vpipe[i] <= vpipe[i-1];
+                pipe_x[i] <= vpipe[i-1] ? ((pipe_x[i-1] + pipe_div[i-1]) >> 1) : pipe_x[i];
+                pipe_div[i] <= pipe_div[i-1];
             end
         end
     end
 
+    assign sqrt_out  = pipe_x[LATENCY];
+    assign valid_out = vpipe[LATENCY];
 endmodule

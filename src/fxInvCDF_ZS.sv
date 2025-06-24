@@ -4,15 +4,16 @@
 
 module fxInvCDF_ZS #(
     parameter WIDTH = 32,
-    parameter QINT = 16
+    parameter QINT = 16,
+    parameter int QFRAC = WIDTH - QINT
     )(
     input logic clk,
     input logic rst_n,
     input logic valid_in,
-    input logic [WIDTH-1:0] t,          // Q16.16 input from sqrt module
+    input logic [WIDTH-1:0] t,          //  input from sqrt module
     input logic negate,                 // negate flag in step 1
     output logic valid_out,
-    output logic signed [WIDTH-1:0] z   // Q16.16 z-score
+    output logic signed [WIDTH-1:0] z   //  z-score
 );
 
     // pre determined constants in Q16.16
@@ -27,73 +28,61 @@ module fxInvCDF_ZS #(
 
 
     // Multipliers
-    logic [WIDTH-1:0] t2, t3;
-    fxMul_always #(WIDTH, QINT) mul_t_t(.clk(clk), .rst_n(rst_n), .a(t), .b(t), .result(mul1_out));    // t^2
-    fxMul_always #(WIDTH, QINT) mult_t_t2(.clk(clk), .rst_n(rst_n), .a(t), .b(t2), .result(mul2_out));  // t^3
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            t2  <= '0;
-            t3  <= '0;
-        end else begin
-            t2  <= mul1_out;
-            t3  <= mul2_out;
-        end
-    end
+    logic v1a, v1b;       // valid_out of stage 1
+    logic [WIDTH-1:0] t2, t3;   
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_t_t(.clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(t), .b(t), .valid_out(v1a), .result(t2));    // t^2
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mult_t_t2(.clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(t), .b(t2), .valid_out(v1b), .result(t3));  // t^3
 
     // Numerator: C0 + C1 * t + C2 * t2
+    logic v2a, v2b;
     logic [WIDTH-1:0] c1t, c2t2, num;
-    fxMul_always #(WIDTH, QINT) mul_c1t(.clk(clk), .rst_n(rst_n), .a(C1), .b(t), .result(c1t));
-    fxMul_always #(WIDTH, QINT) mul_c2t2(.clk(clk), .rst_n(rst_n), .a(C2), .b(t2), .result(c2t2));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_c1t(.clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(C1), .b(t), .valid_out(v2a), .result(c1t));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_c2t2(.clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(C2), .b(t2), .valid_out(v2b), .result(c2t2));
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            num <= 0;
-        end else begin
+            num <= '0;
+        end else if (v2b) begin
             num <= C0 + c1t + c2t2;
         end
     end
     
     // Denominator: 1 + D1 * t + D2 * t2 + D3 * t3
+    logic v3a, v3b, v3c;
     logic [WIDTH-1:0] d1t, d2t2, d3t3, den;
-    fxMul_always #(WIDTH, QINT) mul_d1t(.clk(clk), .rst_n(rst_n), .a(D1), .b(t), .result(d1t));
-    fxMul_always #(WIDTH, QINT) mul_d2t2(.clk(clk), .rst_n(rst_n), .a(D2), .b(t2), .result(d2t2));
-    fxMul_always #(WIDTH, QINT) mul_d3t3(.clk(clk), .rst_n(rst_n), .a(D3), .b(t3), .result(d3t3));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_d1t(.clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(D1), .b(t), .valid_out(v3a), .result(d1t));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_d2t2(.clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(D2), .b(t2), .valid_out(v3b), .result(d2t2));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_d3t3(.clk(clk), .rst_n(rst_n), .valid_in(v1b), .a(D3), .b(t3), .valid_out(v3c), .result(d3t3));
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            den <= 0;
-        end else begin
+            den <= '0;
+        end else if (v3c) begin
             den <= ONE_Q16 + d1t + d2t2 + d3t3;
         end
     end
 
     // Divide numerator by denominator
+    logic v4;
     logic [WIDTH-1:0] ratio;
-    fxDiv_always #(WIDTH, QINT) div_nd (.clk(clk), .rst_n(rst_n), .numerator(num), .denominator(den), .result(ratio));
+    fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_nd (.clk(clk), .rst_n(rst_n), .valid_in(v2b && v3c), .numerator(num), .denominator(den), .valid_out(v4), .result(ratio));
     
-    logic signed [WIDTH-1:0] z_raw;
+    // piplin the negate flag through 5 stages 
+    logic [4:0] negate_pipe;
     always_ff @(posedge clk or negedge rst_n) begin
-      if (!rst_n)
-        z_raw <= '0;
-      else
-        z_raw <= t - ratio;
-    end
-
-    // change the sign
-    always_ff @(posedge clk or negedge rst_n) begin
-      if (!rst_n)
-        z <= '0;
-      else
-        z <= negate ? -z_raw : z_raw;
-    end
-
-    // 6 stage pipeline + 1 for init
-    logic [6:0] vpipe;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)     
-            vpipe <= 7'b0;
+        if (!rst_n)
+            negate_pipe <= 0;
         else
-            vpipe <= {vpipe[5:0], valid_in};//on each clock shift left by one and bring in the current valid_in bit at the least sig bit
-        valid_out <= vpipe[6]; //when 6 cycles are done this is high
+            negate_pipe <= {negate_pipe[3:0], valid_in ? negate : 1'd0};
+    end
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            z <= 0;
+            valid_out <= 0;
+        end else begin
+            valid_out <= v4;
+            if (v4)
+                z <= negate_pipe[4] ? -(t - ratio) : (t - ratio);
+        end
     end
 
 endmodule
