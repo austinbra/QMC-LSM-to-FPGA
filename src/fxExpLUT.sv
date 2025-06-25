@@ -1,13 +1,13 @@
 module fxExpLUT #(
-    parameter WIDTH = 32,
-    parameter QINT = 16
-    parameter QFRAC = WIDTH - QINT,
-    parameter LUT_BITS = 10
+    parameter int WIDTH = 32,
+    parameter int QINT = 16
+    parameter int QFRAC = WIDTH - QINT,
+    parameter int LUT_BITS = 10
 )(
     input  logic clk,
     input  logic rst_n,
     input  logic valid_in,
-    input  logic signed [WIDTH-1:0] x,
+    input  logic signed [WIDTH-1:0] a,
     output logic signed [WIDTH-1:0] exp_result,
     output logic valid_out
 );

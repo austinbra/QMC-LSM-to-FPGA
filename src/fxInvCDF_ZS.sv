@@ -3,9 +3,11 @@
 //-----------------------------------------------------------
 
 module fxInvCDF_ZS #(
-    parameter WIDTH = 32,
-    parameter QINT = 16,
-    parameter int QFRAC = WIDTH - QINT
+    parameter int WIDTH = 32,
+    parameter int QINT = 16,
+    parameter int QFRAC = WIDTH - QINT,
+    parameter int MUL_LATENCY_ALWAYS = 1,
+    parameter int DIV_LATENCY = 3
     )(
     input logic clk,
     input logic rst_n,
@@ -30,14 +32,18 @@ module fxInvCDF_ZS #(
     // Multipliers
     logic v1a, v1b;       // valid_out of stage 1
     logic [WIDTH-1:0] t2, t3;   
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_t_t(.clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(t), .b(t), .valid_out(v1a), .result(t2));    // t^2
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mult_t_t2(.clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(t), .b(t2), .valid_out(v1b), .result(t3));  // t^3
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_t_t(
+        .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(t), .b(t), .valid_out(v1a), .result(t2));    // t^2
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mult_t_t2(
+        .clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(t), .b(t2), .valid_out(v1b), .result(t3));  // t^3
 
     // Numerator: C0 + C1 * t + C2 * t2
     logic v2a, v2b;
     logic [WIDTH-1:0] c1t, c2t2, num;
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_c1t(.clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(C1), .b(t), .valid_out(v2a), .result(c1t));
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_c2t2(.clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(C2), .b(t2), .valid_out(v2b), .result(c2t2));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_c1t(
+        .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(C1), .b(t), .valid_out(v2a), .result(c1t));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_c2t2(
+        .clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(C2), .b(t2), .valid_out(v2b), .result(c2t2));
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             num <= '0;
@@ -49,9 +55,12 @@ module fxInvCDF_ZS #(
     // Denominator: 1 + D1 * t + D2 * t2 + D3 * t3
     logic v3a, v3b, v3c;
     logic [WIDTH-1:0] d1t, d2t2, d3t3, den;
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_d1t(.clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(D1), .b(t), .valid_out(v3a), .result(d1t));
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_d2t2(.clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(D2), .b(t2), .valid_out(v3b), .result(d2t2));
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(1)) mul_d3t3(.clk(clk), .rst_n(rst_n), .valid_in(v1b), .a(D3), .b(t3), .valid_out(v3c), .result(d3t3));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_d1t(
+        .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(D1), .b(t), .valid_out(v3a), .result(d1t));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_d2t2(
+        .clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(D2), .b(t2), .valid_out(v3b), .result(d2t2));
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_d3t3(
+        .clk(clk), .rst_n(rst_n), .valid_in(v1b), .a(D3), .b(t3), .valid_out(v3c), .result(d3t3));
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             den <= '0;
@@ -63,7 +72,8 @@ module fxInvCDF_ZS #(
     // Divide numerator by denominator
     logic v4;
     logic [WIDTH-1:0] ratio;
-    fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_nd (.clk(clk), .rst_n(rst_n), .valid_in(v2b && v3c), .numerator(num), .denominator(den), .valid_out(v4), .result(ratio));
+    fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(DIV_LATENCY)) div_nd (
+        .clk(clk), .rst_n(rst_n), .valid_in(v2b && v3c), .numerator(num), .denominator(den), .valid_out(v4), .result(ratio));
     
     // piplin the negate flag through 5 stages 
     logic [4:0] negate_pipe;

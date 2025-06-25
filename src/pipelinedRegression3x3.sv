@@ -1,9 +1,9 @@
 module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
-	parameter int WIDTH = 32,
-    parameter int QINT = 16,
-    parameter int QFRAC = WIDTH - QINT,
-    parameter int DIV_LATENCY = 3,
-    parameter int MUL_LATENCY = 2
+	parameter int WIDTH         = FP_WIDTH,
+    parameter int QINT          = FP_QINT,
+    parameter int QFRAC         = FP_QFRAC,
+    parameter int MUL_LATENCY 	= FP_MUL_LATENCY,
+    parameter int DIV_LATENCY   = FP_DIV_LATENCY
 )(
     input  logic clk,
     input  logic rst_n,
@@ -13,7 +13,9 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     output logic valid_out,
     output logic signed [WIDTH-1:0] beta [0:2]
 );
-    logic v0, v1, v2, v3, v4, v5, v6, v7;
+	import fpga_cfg_pkg::*;
+
+    logic v0, v1, v2, v3, v4, v5, v6;//v7a, v7b1, v7b, v7c1, v7c
 
     // helper function for abs value 
     function automatic logic signed [WIDTH-1:0] abs_val(input logic signed [WIDTH-1:0] x);
@@ -100,7 +102,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 		for (genvar g = 0; g < 4; ++g) begin: DIV0
 
 			/* verilator lint_off UNUSED */
-			logic signed [2 * WIDTH - 1 : 0] num64_ext;
+			logic signed [2*WIDTH-1:0] num64_ext;
 			/* verilator lint_on UNUSED */
 			/* verilator lint_off WIDTH */
 			assign num64_ext = $signed(mat1[0][g]) <<< QFRAC; // move into the int area for fix point div
@@ -282,7 +284,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     //-------------------------------------------------------------------
 	logic v7a;
     logic signed [WIDTH-1:0] bt2;
-    fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_b2 (
+    fxDiv #(.WIDTH(WIDTH), .QINT(QINT)) div_b2 (
       .clk       (clk),
       .rst_n     (rst_n),
       .valid_in  (v6_done),
@@ -306,7 +308,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 		.result(prod12)
 	);
 
-	fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_b1(
+	fxDiv #(.WIDTH(WIDTH), .QINT(QINT)) div_b1(
 		.clk(clk),
 		.rst_n(rst_n),
 		.valid_in(v7b1),
@@ -332,7 +334,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 		.result(prod01)
 	);
 
-	fxDiv_always #(.WIDTH(WIDTH), .QINT(QINT)) div_b0 (
+	fxDiv #(.WIDTH(WIDTH), .QINT(QINT)) div_b0 (
 		.clk(clk),
 		.rst_n (rst_n),
 		.valid_in(v7c1),

@@ -1,8 +1,8 @@
 module fxDiv_always #(
-    parameter WIDTH = 32,
-    parameter QINT = 16,
-    parameter QFRAC = WIDTH - QINT,
-    parameter LATENCY = 3
+    parameter int WIDTH = 32,
+    parameter int QINT = 16,
+    parameter int QFRAC = WIDTH - QINT,
+    parameter int LATENCY = 3
 )(
     input  logic clk,
     input  logic rst_n,

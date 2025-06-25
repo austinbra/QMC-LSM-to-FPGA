@@ -1,9 +1,12 @@
 
 module inverseCDF #(
-    parameter WIDTH = 32,
-    parameter QINT = 16,         
-    parametere QFRAC = WIDTH - QINT,
-    parameter LUT_BITS = 10
+    parameter int WIDTH              = FP_WIDTH,
+    parameter int QINT               = FP_QINT,
+    parameter int QFRAC              = FP_QFRAC,
+    parameter int MUL_LATENCY_ALWAYS = FP_MUL_ALWAYS_LATENCY,
+    parameter int DIV_LATENCY        = FP_DIV_LATENCY,
+    parameter int SQRT_LATENCY       = FP_SQRT_LATENCY,
+    parameter int LUT_BITS           = FP_LUT_BITS
 )(
     input logic clk,
     input logic rst_n,         
@@ -12,6 +15,7 @@ module inverseCDF #(
     output logic valid_out,
     output logic signed [WIDTH-1:0] z_out       // Q11.21 output z-score
 );
+    import fpga_cfg_pkg::*;
 
     // Step 1: Convert sobol sequence number to x ∈ (0,0.5]
     logic [WIDTH-1:0] x;
@@ -70,8 +74,8 @@ module inverseCDF #(
         .rst_n(rst_n),
         .valid_in(v2b),
         .a(neg2_ln_x),
-        .sqrt_out(t),
-        .valid_out(v3)
+        .valid_out(v3),
+        .sqrt_out(t)
     );
 
     // Delay negate signal to align with t  
@@ -96,9 +100,9 @@ module inverseCDF #(
         .valid_in(v3),
         .t(t),
         .negate(negate_pipe[9]),  // 10 cycles of delay
-        .z(z),
-        .valid_out(v4)
-    );
+        .valid_out(v4),
+        .z(z)
+        );
 
     assign z_out = z;
     assign valid_out = v4;

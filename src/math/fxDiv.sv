@@ -5,7 +5,7 @@
 module fxDiv #(
     parameter int WIDTH    = 32,                 
     parameter int QINT     = 16,                 
-    parameter int QFRAC    = WIDTH - QINT,       
+    parameter int QFRAC    = WIDTH - QINT,
     parameter int LATENCY  = 3                   // pipeline depth
 )(
     input  logic                  clk,
