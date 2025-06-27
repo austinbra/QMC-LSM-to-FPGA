@@ -1,3 +1,5 @@
+//Streaming / one-per-path work -> fxMul_always (handshake)
+
 module fxMul_always #(
     parameter int WIDTH = 32,                
     parameter int QINT  = 16,                

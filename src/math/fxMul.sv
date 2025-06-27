@@ -1,7 +1,5 @@
 // fxMul.sv
-// Fixed-point multiplier with QINT.QFRAC format,
-// pipelined for MUL_LATENCY cycles, valid_in/valid_out handshake.
-
+// Burst / parallel work -> fxMul (need separate done flags)
 module fxMul #(
     parameter int WIDTH    = 32,                 // total bits (signed)
     parameter int QINT     = 16,                 // integer bits
