@@ -17,11 +17,28 @@ module fxMul #(
     output logic                  valid_out          // pulses true when result is valid
 );
 
+    // ------------------------------------------------------------
+	// helper: return 1 if the upper bits are just sign-extension
+	// ------------------------------------------------------------
+	localparam int UBIT = WIDTH - QFRAC;
+    function automatic bit fits_Q16_16
+        (input logic signed [2*WIDTH-1:0] x);
+        logic signed [UBIT-1:0] upper_bits;
+        logic signed [UBIT-1:0] sign_bits;
+        begin
+            upper_bits = x[2*WIDTH-1 : WIDTH+QFRAC];
+            sign_bits  = { UBIT{ x[WIDTH+QFRAC-1] } };
+            fits_Q16_16 = (upper_bits == sign_bits);
+        end
+    endfunction
+
     localparam int RAWW = 2*WIDTH;
     logic signed [RAWW-1:0] raw_mul;
 
     always_comb begin
         raw_mul = $signed(a) * $signed(b);
+        assert (fits_Q16_16(raw_mul))
+    		else $error("fxMul overflow: a=%0d b=%0d at %0t", a, b, $time);
     end
 
     logic signed [RAWW-1:0] pipe_mul [0:LATENCY];
