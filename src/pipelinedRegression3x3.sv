@@ -1,9 +1,10 @@
 module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
-	parameter int WIDTH         = fpga_cfg_pkg::FP_WIDTH,
-    parameter int QINT          = fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC         = fpga_cfg_pkg::FP_QFRAC,
-    parameter int MUL_LATENCY 	= fpga_cfg_pkg::FP_MUL_LATENCY,
-    parameter int DIV_LATENCY   = fpga_cfg_pkg::FP_DIV_LATENCY
+	parameter int WIDTH         		= fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT          		= fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC         		= fpga_cfg_pkg::FP_QFRAC,
+    parameter int MUL_LATENCY 			= fpga_cfg_pkg::FP_MUL_LATENCY,
+    parameter int MUL_ALWAYS_LATENCY 	= fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY,
+    parameter int DIV_LATENCY   		= fpga_cfg_pkg::FP_DIV_LATENCY
 )(
     input  logic clk,
     input  logic rst_n,
@@ -15,7 +16,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     output logic signed [WIDTH-1:0] beta [0:2]
 );
 
-    logic v0, v1, v2, v3, v4, v5, v6, v6b;//v7a, v7b1, v7b, v7c1, v7c
+    logic v0, v1, v2, v3, v4, v5, v6, v6b; //v7a, v7b1, v7b, v7c1, v7c
 
     // helper function for abs value 
     function automatic logic signed [WIDTH-1:0] abs_val(input logic signed [WIDTH-1:0] x);
@@ -366,7 +367,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     logic v7b1, v7b;
 	logic signed [WIDTH-1:0] prod12, bt1;
 
-	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul12(
+	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_ALWAYS_LATENCY)) mul12(
 		.clk(clk),
 		.rst_n(rst_n),
 		.valid_in(v7a),
@@ -392,7 +393,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 	logic v7c1, v7c;
 	logic signed [WIDTH-1:0] prod01, bt0;
 
-	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul01 (
+	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_ALWAYS_LATENCY)) mul01 (
 		.clk(clk),
 		.rst_n(rst_n),
 		.valid_in(v7b),

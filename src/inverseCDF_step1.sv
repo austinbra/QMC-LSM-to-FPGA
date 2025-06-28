@@ -1,8 +1,8 @@
 // Convert sobol sequence number to x ∈ (0,0.5]
 module inverseCDF_step1 #(
-    parameter WIDTH = 32,
-    parameter QINT = 16,
-    parameter int QFRAC = WIDTH - QINT
+    parameter WIDTH = fpga_cfg_pkg::FP_WIDTH,
+    parameter QINT = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC
 )(
     input logic clk,
     input logic rst_n,

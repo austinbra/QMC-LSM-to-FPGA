@@ -1,7 +1,7 @@
 // approximates square root using newton-raphson algorithm
 module fxSqrt #(
-    parameter int WIDTH = 32,
-    parameter int QINT = 16,
+    parameter int WIDTH = fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT = fpga_cfg_pkg::FP_QINT,
     parameter int LATENCY = 4
 )(
     input  logic clk,
