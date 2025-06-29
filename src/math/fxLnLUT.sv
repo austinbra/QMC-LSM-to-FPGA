@@ -1,9 +1,9 @@
 // LUT for ln(x), for 0.000015 <= x <= 0.5
 module fxlnLUT #(
-    parameter WIDTH = 32,
-    parameter QINT = 16,
-    parameter int QFRAC = WIDTH - QINT,
-    parameter LUT_BITS = 10   // 1024 entries in LUT
+    parameter WIDTH = fpga_cfg_pkg::FP_WIDTH,
+    parameter QINT = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC,
+    parameter LUT_BITS = fpga_cfg_pkg::FP_LUT_BITS   // 1024 entries in LUT
 )(
     input logic clk,
     input logic rst_n,

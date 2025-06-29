@@ -1,11 +1,11 @@
 module GBM_step #(
-    parameter int WIDTH              = FP_WIDTH,
-    parameter int QINT               = FP_QINT,
-    parameter int QFRAC              = FP_QFRAC,
-    parameter int MUL_LATENCY_ALWAYS = FP_MUL_ALWAYS_LATENCY,
-    parameter int DIV_LATENCY        = FP_DIV_LATENCY,
-    parameter int SQRT_LATENCY       = FP_SQRT_LATENCY,
-    parameter int LUT_BITS           = FP_LUT_BITS
+    parameter int WIDTH              = fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT               = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC,
+    parameter int MUL_LATENCY_ALWAYS = fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY,
+    parameter int DIV_LATENCY        = fpga_cfg_pkg::FP_DIV_LATENCY,
+    parameter int SQRT_LATENCY       = fpga_cfg_pkg::FP_SQRT_LATENCY,
+    parameter int LUT_BITS           = fpga_cfg_pkg::FP_LUT_BITS
 )(
     input  logic                       clk,
     input  logic                       rst_n,
@@ -62,8 +62,8 @@ module GBM_step #(
     // ---------------------------
     logic v3a, v3b, v3c;
     logic signed [WIDTH-1:0] sqrt_t, sigma_sqrt_t, diffusion;
-    fxSqrt #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(SQRT_LATENCY)) sqrt_blk (
-        .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .y(t), .valid_out(v3a), .sqrt_out(sqrt_t)
+    fxSqrt #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(DIV_LATENCY)) sqrt_blk (
+        .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(t), .valid_out(v3a), .sqrt_out(sqrt_t)
     );
     fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_sigma_sqrt (
         .clk(clk), .rst_n(rst_n), .valid_in(v3a), .a(sqrt_t), .b(sigma), .valid_out(v3b), .result(sigma_sqrt_t)

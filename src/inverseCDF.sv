@@ -5,8 +5,7 @@ module inverseCDF #(
     parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC,
     parameter int MUL_LATENCY        = fpga_cfg_pkg::FP_MUL_LATENCY,
     parameter int DIV_LATENCY        = fpga_cfg_pkg::FP_DIV_LATENCY,
-    parameter int SQRT_LATENCY       = fpga_cfg_pkg::FP_SQRT_LATENCY,
-    parameter int LUT_BITS           = fpga_cfg_pkg::FP_LUT_BITS
+    parameter int SQRT_LATENCY       = fpga_cfg_pkg::FP_SQRT_LATENCY
 )(
     input logic clk,
     input logic rst_n,         
@@ -16,7 +15,7 @@ module inverseCDF #(
     output logic signed [WIDTH-1:0] z_out       // Q11.21 output z-score
 );
 
-    localparam signed [WIDTH-1:0] TWO = WIDTH'sd2;   // +2.0
+    localparam signed [WIDTH-1:0] TWO = 'sd2;   // +2.0
     localparam int STEP1_LATENCY = 1;
     localparam int LN_LUT_LATENCY = 1;
 
@@ -26,7 +25,7 @@ module inverseCDF #(
     logic negate;
     logic v1;
 
-    inverseCDF_step1 #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC)) step1 (
+    inverseCDF_step1 #() step1 (
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(valid_in),
@@ -40,7 +39,7 @@ module inverseCDF #(
     logic [WIDTH-1:0] ln_x;
     logic v2a;
 
-    fxlnLUT #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LUT_BITS(LUT_BITS)) loglut (
+    fxlnLUT #() loglut (
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(v1),
@@ -52,7 +51,7 @@ module inverseCDF #(
     logic [WIDTH-1:0] neg2_ln_x;
     logic v2b;
 
-    fxMul #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_LATENCY)) mul_neg2(
+    fxMul #() mul_neg2(
         .clk(clk),
 		.rst_n(rst_n),
 		.valid_in(v2a),
@@ -64,7 +63,7 @@ module inverseCDF #(
     logic [WIDTH-1:0] t;
     logic v3;
 
-    fxSqrt #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(SQRT_LATENCY)) sqrt_unit (
+    fxSqrt #() sqrt_unit (
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(v2b),

@@ -1,25 +1,25 @@
 module fxExpLUT #(
-    parameter int WIDTH = 32,
-    parameter int QINT = 16
-    parameter int QFRAC = WIDTH - QINT,
-    parameter int LUT_BITS = 10
+    parameter int WIDTH = fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC,
+    parameter int LUT_BITS = fpga_cfg_pkg::FP_LUT_BITS
 )(
     input  logic clk,
     input  logic rst_n,
     input  logic valid_in,
     input  logic signed [WIDTH-1:0] a,
-    output logic signed [WIDTH-1:0] exp_result,
+    output logic signed [WIDTH-1:0] result,
     output logic valid_out
 );
 
     // ROM for exp LUT
     localparam LUT_SIZE = 1 << LUT_BITS;
     logic [WIDTH-1:0] exp_lut [0:LUT_SIZE-1];
-    initial $readmemh("gen/exp_lut_1024_q16.mem", exp_lut);
+    initial $readmemh("exp_lut_1024.mem", exp_lut);
 
     // Index calculation: take LUT_BITS MSBs of fractional part
     logic [LUT_BITS-1:0] lut_index;
-    assign lut_index = x[QFRAC + LUT_BITS - 1 : QFRAC];
+    assign lut_index = a[QFRAC + LUT_BITS - 1 : QFRAC];
 
     // Output register
     logic [WIDTH-1:0] result_reg;

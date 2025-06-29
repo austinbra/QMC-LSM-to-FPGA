@@ -1,22 +1,21 @@
-module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
+module regression #(// Deep pipelined Gaussian elimination (Q16.16)
 	parameter int WIDTH         		= fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT          		= fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC         		= fpga_cfg_pkg::FP_QFRAC,
-    parameter int MUL_LATENCY 			= fpga_cfg_pkg::FP_MUL_LATENCY,
-    parameter int MUL_ALWAYS_LATENCY 	= fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY,
-    parameter int DIV_LATENCY   		= fpga_cfg_pkg::FP_DIV_LATENCY
 )(
     input  logic clk,
     input  logic rst_n,
-    input  logic valid_in,
-    input  logic signed [WIDTH-1:0] A_flat [0:8],
-    input  logic signed [WIDTH-1:0] B_flat [0:2],
-    output logic valid_out,
-	output logic singular_err,
+
+	//from accumulator
+    input  logic 					valid_in,
+    input  logic signed [WIDTH-1:0] mat_flat [0:11],
+    input  logic 					solver_ready,
+    output logic 					valid_out,
+	output logic 					singular_err,
     output logic signed [WIDTH-1:0] beta [0:2]
 );
 
-    logic v0, v1, v2, v3, v4, v5, v6, v6b; //v7a, v7b1, v7b, v7c1, v7c
+    logic v0, v1, v2, v3, v4, v5, v6, v6b, v7a, v7b1, v7b, v7c1, v7c;
 
     // helper function for abs value 
     function automatic logic signed [WIDTH-1:0] abs_val(input logic signed [WIDTH-1:0] x);
@@ -28,12 +27,10 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 	//-----------------------------------------------------------
 	logic pivot0_is_zero, pivot1_is_zero, pivot2_is_zero;
 	always_ff @(posedge clk or negedge rst_n) begin
-		if (!rst_n)
-			singular_err <= 1'b0;
-		else if (v0)                // new problem entering pipe
-        	singular_err <= 1'b0;
+		if (!rst_n || v0)
+			singular_err <=  0;
 		else if (pivot0_is_zero | pivot1_is_zero | pivot2_is_zero)
-			singular_err <= 1'b1;           // sticky until reset
+			singular_err <=  1;           // sticky until reset
 	end
 	
 
@@ -53,18 +50,20 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
   	//-------------------------------------------------------------------
     // Stage 0 : get inputs
     //-------------------------------------------------------------------
-	//mat0[i][j] = A_flat[i∗3+j], mat0[i][3] = B_flat[i]
-
+	logic v0;
+	logic signed [WIDTH-1:0] sum1_latched; 
+	logic signed [WIDTH-1:0] sumy_latched; 
     always_ff @(posedge clk or negedge rst_n) begin
-		if (!rst_n)
+		if (!rst_n) 
 			v0 <= 0;
 		else begin
 			v0 <= valid_in;
 			for (int i = 0; i < 3; ++i) begin
-				for (int j = 0; j < 3; ++j)
-					mat0[i][j] <= A_flat[i*3+j];
-				mat0[i][3] <= B_flat[i];
+				for (int j = 0; j < 4; ++j)
+					mat0[i][j] <= mat_flat[i*4+j];
 			end
+			sum1_latched <= mat_flat[0];
+        	sumy_latched <= mat_flat[3];
 		end
     end
 
@@ -91,10 +90,8 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 			for (int i = 0; i < 3; ++i) begin
 				for (int j = 0; j < 4; ++j) begin
 					case(i)
-
 					0:
 						mat1[i][j] <= mat0[pivot0_row][j];
-
 					default:
 						if (i[1:0] == pivot0_row)
 							mat1[i][j] <= mat0[0][j];
@@ -118,22 +115,14 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 		for (genvar g = 0; g < 4; ++g) begin: DIV0
 
 			/* verilator lint_off UNUSED */
-			logic signed [2*WIDTH-1:0] num64_ext;
-			/* verilator lint_on UNUSED */
-			/* verilator lint_off WIDTH */
-			assign num64_ext = $signed(mat1[0][g]) <<< QFRAC; // move into the int area for fix point div
+			logic signed [2*WIDTH-1:0] num64_ext = $signed(mat1[0][g]) <<< QFRAC; // move into the int area for fix point div
 			/* verilator lint_on WIDTH */
 			assign div0_num[g] = num64_ext[WIDTH + QFRAC - 1 : QFRAC];
 			assign div0_den[g] = mat1[0][0];
 
-			fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) d0(
-				.clk(clk),
-				.rst_n(rst_n),
-				.valid_in(v1 & ~pivot0_is_zero),
-				.numerator(div0_num[g]),
-				.denominator(div0_den[g]),
-				.result(div0_res[g]),
-				.valid_out(div0_done[g]));
+			fxDiv #() d0(
+				.clk(clk), .rst_n(rst_n), .valid_in(v1 & ~pivot0_is_zero),
+				.numerator(div0_num[g]), .denominator(div0_den[g]), .result(div0_res[g]), .valid_out(div0_done[g]));
     	end
 	endgenerate
 
@@ -156,25 +145,14 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 
     logic signed [WIDTH-1 : 0] mul0_r0[0:3], mul0_r1[0:3];
     logic [3:0] mul0_done_r0, mul0_done_r1;
-
     generate for (genvar c = 0; c < 4; c++) begin: MUL0
-      fxMul #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_LATENCY)) m0(
-        .clk(clk),
-		.rst_n(rst_n),
-		.valid_in(v2),
-        .a(mat2[1][0]),
-		.b(mat2[0][c]),
-		.result(mul0_r0[c]),
-		.valid_out(mul0_done_r0[c]));
+		fxMul_always  #() m0(
+			.clk(clk), .rst_n(rst_n), .valid_in(v2),
+			.a(mat2[1][0]), .b(mat2[0][c]), .result(mul0_r0[c]), .valid_out(mul0_done_r0[c]));
 
-      fxMul #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_LATENCY)) m1(
-        .clk(clk),
-		.rst_n(rst_n),
-		.valid_in(v2),
-        .a(mat2[2][0]),
-		.b(mat2[0][c]),
-		.result(mul0_r1[c]),
-		.valid_out(mul0_done_r1[c]));
+		fxMul_always  #() m1(
+			.clk(clk), .rst_n(rst_n), .valid_in(v2),
+			.a(mat2[2][0]), .b(mat2[0][c]), .result(mul0_r1[c]), .valid_out(mul0_done_r1[c]));
     end endgenerate
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -241,14 +219,9 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 		assign div1_num[g] = num64_ext1[WIDTH + QFRAC - 1 : QFRAC];
 		assign div1_den[g]= mat4[1][1];
 		
-		fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) d1(
-			.clk(clk),
-			.rst_n(rst_n),
-			.valid_in(v4 & ~pivot1_is_zero),
-			.numerator(div1_num[g]),
-			.denominator(div1_den[g]),
-			.result(div1_res[g]),
-			.valid_out(div1_done[g]));
+		fxDiv #() d1(
+			.clk(clk), .rst_n(rst_n), .valid_in(v4 & ~pivot1_is_zero),
+			.numerator(div1_num[g]), .denominator(div1_den[g]), .result(div1_res[g]), .valid_out(div1_done[g]));
 		end 
 	endgenerate
 
@@ -293,7 +266,7 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 			for (int j = 1; j < 4; ++j) begin
 				logic signed [2*WIDTH-1:0] prod64;
 				prod64 = $signed(mat5[2][1]) * $signed(mat5[1][j]);
-				prod64 = prod64 >>> QFRAC;               // undo scale
+				prod64 = prod64 >>> QFRAC;
 				mat6[2][j] <= mat5[2][j] - prod64[WIDTH+QFRAC-1 : QFRAC];
 			end
 		end
@@ -317,15 +290,9 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
 		assign num64_ext2 = $signed({{WIDTH{mat6[2][g][WIDTH-1]}}, mat6[2][g]}) <<< QFRAC;
 		assign div2_num[g] = num64_ext2[WIDTH+QFRAC-1 : QFRAC];
 
-		fxDiv #(.WIDTH  (WIDTH),  .QINT(QINT),  .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) d2 (
-			.clk(clk),
-			.rst_n(rst_n),
-			.valid_in(v6_done),
-			.numerator(div2_num[g]),
-			.denominator(div2_den),
-			.result(div2_res[g]),
-			.valid_out(div2_done[g])
-		);
+		fxDiv #() d2 (
+			.clk(clk), .rst_n(rst_n), .valid_in(v6_done),
+			.numerator(div2_num[g]), .denominator(div2_den), .result(div2_res[g]), .valid_out(div2_done[g]));
 		end
 	endgenerate
 
@@ -350,82 +317,78 @@ module pipelinedRegression3x3 #(// Deep pipelined Gaussian elimination (Q16.16)
     //-------------------------------------------------------------------
     // Stage‑7 : back subs 
     //-------------------------------------------------------------------
-	logic v7a;
     logic signed [WIDTH-1:0] bt2;
 	assign pivot2_is_zero = v6b & (mat7[2][2] == '0);
-    fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) div_b2 (
-      .clk       (clk),
-      .rst_n     (rst_n),
-      .valid_in  (v6b & ~pivot2_is_zero),
-      .numerator (mat7[2][3] <<< QFRAC),
-      .denominator(mat7[2][2]),
-      .valid_out (v7a),
-      .result    (bt2)
-    );
+    fxDiv #() div_b2 (
+      .clk(clk), .rst_n(rst_n),.valid_in(v6b & ~pivot2_is_zero),
+      .numerator(mat7[2][3] <<< QFRAC), .denominator(mat7[2][2]), .valid_out(v7a), .result(bt2));
 
     //beta[1] = (mat6[1][3] – mat6[1][2]*beta[2]) / mat6[1][1]
-    logic v7b1, v7b;
 	logic signed [WIDTH-1:0] prod12, bt1;
 
-	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_ALWAYS_LATENCY)) mul12(
-		.clk(clk),
-		.rst_n(rst_n),
-		.valid_in(v7a),
-		.a(mat7[1][2]),
-		.b(bt2),
-		.valid_out(v7b1),
-		.result(prod12)
+	fxMul_always #() mul12(
+		.clk(clk), .rst_n(rst_n), .valid_in(v7a), 
+		.a(mat7[1][2]), .b(bt2), .valid_out(v7b1), .result(prod12)
 	);
 
-	fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) div_b1(
-		.clk(clk),
-		.rst_n(rst_n),
-		.valid_in(v7b1),
+	fxDiv #() div_b1(
+		.clk(clk), .rst_n(rst_n), .valid_in(v7b1),
 		.numerator(($signed(mat7[1][3]) - prod12) <<< QFRAC), 
-		.denominator(mat7[1][1]),
-		.valid_out(v7b),
-		.result(bt1)
+		.denominator(mat7[1][1]), .valid_out(v7b), .result(bt1)
 	);
 
 
 	// beta[0] = (beta[0] – mat6[0][1]*beta[1]) / mat6[0][0]
-	// -------------------------------------
-	logic v7c1, v7c;
 	logic signed [WIDTH-1:0] prod01, bt0;
-
-	fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(MUL_ALWAYS_LATENCY)) mul01 (
-		.clk(clk),
-		.rst_n(rst_n),
-		.valid_in(v7b),
-		.a(mat7[0][1]),
-		.b(bt1),
-		.valid_out (v7c1),
-		.result(prod01)
+	fxMul_always #() mul01 (
+		.clk(clk), .rst_n(rst_n), .valid_in(v7b),
+		.a(mat7[0][1]), .b(bt1), .valid_out (v7c1), .result(prod01)
 	);
 
-	fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) div_b0 (
-		.clk(clk),
-		.rst_n (rst_n),
-		.valid_in(v7c1),
-		.numerator(($signed(mat7[0][3]) - prod01) <<< QFRAC),  // <<< fixed
-		.denominator(mat7[0][0]),
-		.valid_out(v7c),
-		.result(bt0)
+	fxDiv #() div_b0 (
+		.clk(clk), .rst_n (rst_n), .valid_in(v7c1),
+		.numerator(($signed(mat7[0][3]) - prod01) <<< QFRAC), 
+		.denominator(mat7[0][0]), .valid_out(v7c), .result(bt0)
 	);
+
+	// -------------------------------------------------------------
+    // Stage-7d Fallback if singular, look at accumulator code for why
+    // -------------------------------------------------------------
+    logic v_fallback  = v7c &  singular_err;   // bad pivot
+    logic v_good      = v7c & ~singular_err;   // normal finish
+	logic mean_valid;
+    logic signed [WIDTH-1:0] mean_payoff;
+
+    fxDiv #(.WIDTH(WIDTH),.QINT(QINT)) div_mean (
+        .clk(clk), .rst_n(rst_n), .valid_in(v_fallback),
+        .numerator(sumy_latched  <<< QFRAC), .denominator(sum1_latched ), 
+		.result(mean_payoff), .valid_out(mean_valid)
+    );
+
 
     always_ff @(posedge clk or negedge rst_n) begin
-		if (!rst_n) begin
-			beta[0] <= '0;
+        if (!rst_n) begin
+            valid_out <= 1'b0;
+            beta[0] <= '0;
 			beta[1] <= '0;
 			beta[2] <= '0;
-			valid_out <= 1'b0;
-		end else begin
-			valid_out <= v7c;
-			if (v7c) begin
-				beta[2] <= bt2;
-				beta[1] <= bt1;
-				beta[0] <= bt0;
-			end
-		end
+        end else begin
+            // normal path
+            if (v_mean & solver_ready) begin
+                beta[2]   <= bt2;
+                beta[1]   <= bt1;
+                beta[0]   <= bt0;
+                valid_out <= 1'b1;
+            end
+            // fallback path
+            else if (mean_valid & solver_ready) begin
+                beta[2]   <= '0;
+                beta[1]   <= '0;
+                beta[0]   <= mean_payoff;
+                valid_out <= 1'b1;
+            end
+            else
+                valid_out <= 1'b0; 
+        end
     end
 endmodule

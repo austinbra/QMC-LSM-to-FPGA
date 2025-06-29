@@ -1,10 +1,10 @@
 // fxMul.sv
 // Burst / parallel work -> fxMul (need separate done flags)
 module fxMul #(
-    parameter int WIDTH    = 32,                 // total bits (signed)
-    parameter int QINT     = 16,                 // integer bits
-    parameter int QFRAC    = WIDTH - QINT,       // fractional bits
-    parameter int LATENCY  = 2                   // pipeline depth
+    parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH,                 // total bits (signed)
+    parameter int QINT     = fpga_cfg_pkg::FP_QINT,                 // integer bits
+    parameter int QFRAC    = fpga_cfg_pkg::FP_QFRAC,       // fractional bits
+    parameter int LATENCY  = fpga_cfg_pkg::FP_MUL_LATENCY                   // pipeline depth
 )(
     input  logic                  clk,
     input  logic                  rst_n,        // active-low reset

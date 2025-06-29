@@ -3,11 +3,11 @@
 //-----------------------------------------------------------
 
 module fxInvCDF_ZS #(
-    parameter int WIDTH = 32,
-    parameter int QINT = 16,
-    parameter int QFRAC = WIDTH - QINT,
-    parameter int MUL_ALWAYS_LATENCY = fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY,
-    parameter int DIV_LATENCY = fpga_cfg_pkg::FP_DIV_LATENCY
+    parameter int WIDTH                 = fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT                  = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC                 = fpga_cfg_pkg::FP_QFRAC,
+    parameter int MUL_ALWAYS_LATENCY    = fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY,
+    parameter int DIV_LATENCY           = fpga_cfg_pkg::FP_DIV_LATENCY
     )(
     input logic clk,
     input logic rst_n,
@@ -19,14 +19,14 @@ module fxInvCDF_ZS #(
 );
 
     // pre determined constants in Q16.16
-    localparam signed [WIDTH-1:0] C0 = WIDTH'sd164835;   // 2.515517
-    localparam signed [WIDTH-1:0] C1 = WIDTH'sd52584;     // 0.802853
-    localparam signed [WIDTH-1:0] C2 = WIDTH'sd677;       // 0.010328
+    localparam signed [WIDTH-1:0] C0 = 'sd164835;   // 2.515517
+    localparam signed [WIDTH-1:0] C1 = 'sd52584;     // 0.802853
+    localparam signed [WIDTH-1:0] C2 = 'sd677;       // 0.010328
 
-    localparam signed [WIDTH-1:0] D1 = WIDTH'sd93912;   // 1.432788
-    localparam signed [WIDTH-1:0] D2 = WIDTH'sd12393;   // 0.189269
-    localparam signed [WIDTH-1:0] D3 = WIDTH'sd86;      // 0.001308
-    localparam signed [WIDTH-1:0] ONE = WIDTH'sd65536 ; // 1.0
+    localparam signed [WIDTH-1:0] D1 = 'sd93912;   // 1.432788
+    localparam signed [WIDTH-1:0] D2 = 'sd12393;   // 0.189269
+    localparam signed [WIDTH-1:0] D3 = 'sd86;      // 0.001308
+    localparam signed [WIDTH-1:0] ONE = 'sd65536 ; // 1.0
 
 
     // Multipliers

@@ -2,7 +2,9 @@
 module fxSqrt #(
     parameter int WIDTH = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT = fpga_cfg_pkg::FP_QINT,
-    parameter int LATENCY = 4
+    parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC,
+    parameter int DIV_LATENCY = fpga_cfg_pkg::FP_DIV_LATENCY,
+    parameter int LATENCY = fpga_cfg_pkg::FP_SQRT_LATENCY
 )(
     input  logic clk,
     input  logic rst_n,
@@ -17,12 +19,12 @@ module fxSqrt #(
     logic vpipe [0:LATENCY];
 
     logic temp;
-    fxDiv #(WIDTH, QINT, QFRAC) div (
+    fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .LATENCY(DIV_LATENCY)) div (
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(valid_in),
-        .num(a),
-        .denom(pipe_x[0]),
+        .numerator(a),
+        .denominator(pipe_x[0]),
         .valid_out(temp),
         .result(pipe_div[0])
     );

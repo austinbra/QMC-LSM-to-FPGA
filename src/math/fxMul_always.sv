@@ -1,10 +1,10 @@
 //Streaming / one-per-path work -> fxMul_always (handshake)
 
 module fxMul_always #(
-    parameter int WIDTH = 32,                
-    parameter int QINT  = 16,                
-    parameter int QFRAC = WIDTH - QINT,   
-    parameter int LATENCY = 1                 
+    parameter int WIDTH = fpga_cfg_pkg::FP_WIDTH,                
+    parameter int QINT  = fpga_cfg_pkg::FP_QINT,                
+    parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC,   
+    parameter int LATENCY = fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY                 
 )(
     input  logic clk,
     input  logic rst_n,        

@@ -3,10 +3,10 @@
 // pipelined for DIV_LATENCY cycles, valid_in/valid_out handshake.
 
 module fxDiv #(
-    parameter int WIDTH    = 32,                 
-    parameter int QINT     = 16,                 
-    parameter int QFRAC    = WIDTH - QINT,
-    parameter int LATENCY  = 3                   // pipeline depth
+    parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH,                 
+    parameter int QINT     = fpga_cfg_pkg::FP_QINT,                 
+    parameter int QFRAC    = fpga_cfg_pkg::FP_QFRAC,
+    parameter int LATENCY  = fpga_cfg_pkg::FP_DIV_LATENCY
 )(
     input  logic                  clk,
     input  logic                  rst_n,       
