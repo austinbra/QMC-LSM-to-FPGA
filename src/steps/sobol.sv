@@ -1,93 +1,60 @@
-//=============================================================================
-// sobol_fast  – 1-cycle, 32-bit Sobol draw, ready/valid interface
-//   *  Block-RAM holds M×32 direction numbers
-//   *  Gray-coded index so only one bit changes per path
-//   *  5-level balanced XOR tree (fastest combinational form)
-//=============================================================================
-module sobol_fast #(
-    parameter int WIDTH = fpga_cfg_pkg::FP_WIDTH,     // direction word width (fixed at 32)
-    parameter int M = 50                         // Sobol dimensions (time steps)
-)(
-    input  logic                     clk,
-    input  logic                     rst_n,
 
-    // stream interface
-    input  logic                     valid_in,
-    input  logic [WIDTH-1:0]         N,       		// number of paths
-    input  logic [$clog2(M)-1:0]     dim_in,       // 0 … M-1
-    output logic                     valid_out,
-    output logic [WIDTH-1:0]         sobol_out 
+module sobol_flex #(
+    parameter int WIDTH = fpga_cfg_pkg::FP_WIDTH,   // 16, 32, 64...
+    parameter int M = 50                       // time-steps "dimensions"
+)(
+    input  logic                         clk,
+    input  logic                         rst_n,
+
+    input  logic                         valid_in,
+    input  logic [WIDTH-1:0]             idx_in,       // path index (row)
+    input  logic [$clog2(M)-1:0]         dim_in,       // current time-step (col)
+    output logic                         valid_out,
+    output logic [WIDTH-1:0]             sobol_out
 );
 
-    //-------------------------------------------------------------------------
-    // 1) synchronous BRAM for direction numbers (M×32 words)
-    //-------------------------------------------------------------------------
+    // Direction-number memory :  M * WIDTH words
     (* ram_style = "block" *)
-    logic [WIDTH-1:0] direction [0:M*WIDTH-1];
+    logic [WIDTH-1:0]  direction [0:M*WIDTH-1];
+    initial $readmemh("../gen/direction.mem", direction);
 
-    initial $readmemh("gen/direction.mem", direction);
 
-    // registered address into BRAM  (dim*32 + bit)
-    logic [$clog2(M*WIDTH)-1:0] dir_addr_r;
-    always_ff @(posedge clk) dir_addr_r <= {dim_in, N[4:0]};
-
-    // word selected by BRAM, valid next cycle
-    logic [WIDTH-1:0] dir_word_r;
-    always_ff @(posedge clk) dir_word_r <= direction[dir_addr_r];
-
-    //-------------------------------------------------------------------------
-    // 2) one-clock Gray code (combinational)
-    //-------------------------------------------------------------------------
     logic [WIDTH-1:0] gray;
-    always_comb gray = N ^ (N >> 1);
+    always_comb gray = idx_in ^ (idx_in >> 1); 
+    //one on/off shifts the new dot into the biggest available gap.
+    //Because the recipe is deterministic, the generator never stores the earlier points.
+    //You just feed in the row index i and the formula dictates the new coordinate
 
-    //-------------------------------------------------------------------------
-    // 3) 5-level balanced XOR tree
-    //-------------------------------------------------------------------------
-    // leaf 0‥31: take direction[dim*32+k] when gray[k]==1 else 0
-    logic [WIDTH-1:0] leaf [0:31];
+
+    logic [WIDTH-1:0] leaf [0:WIDTH-1];
     genvar k;
     generate
-        for (k = 0; k < 32; k = k + 1)
-            assign leaf[k] = gray[k] ? direction[{dim_in, k[4:0]}] : '0;
+        for (k = 0; k < WIDTH; k = k + 1)
+            assign leaf[k] = gray[k] ? direction[dim_in*WIDTH + k] : '0; //for each bit position check if high then save x and y value, else 0
     endgenerate
 
-    // level-1: 16 XORs
-    logic [WIDTH-1:0] l1 [0:15];
+    // depth = ceil(log2(WIDTH))
+    localparam int LEVELS = (WIDTH <= 1) ? 1 : $clog2(WIDTH);
+
+    // Stages; example: stage[l][i] holds XOR result at level l, element i
+    logic [WIDTH-1:0] stage [0:LEVELS] ;
     generate
-        for (k = 0; k < 16; k = k + 1)
-            assign l1[k] = leaf[2*k] ^ leaf[2*k+1];
+        for (k = 0; k < WIDTH; k++)
+            assign stage[0][k] = leaf[k];
+
+        //xor everything together
+        for (k = 0; k < LEVELS; k++) begin : GEN_LEVEL
+            for (int j = 0; j < (WIDTH >> (k+1)); j = j + 1) begin : GEN_PAIR
+                assign stage[k+1][j] = stage[k][2*j] ^ stage[k][2*j+1];
+            end
+        end
     endgenerate
+    assign sobol_out = stage[LEVELS][0];  // one 32-bit fraction on the 0–1 line, it lands where the biggest gap would have been split in half.
 
-    // level-2: 8 XORs
-    logic [WIDTH-1:0] l2 [0:7];
-    generate
-        for (k = 0; k < 8; k = k + 1)
-            assign l2[k] = l1[2*k] ^ l1[2*k+1];
-    endgenerate
-
-    // level-3: 4 XORs
-    logic [WIDTH-1:0] l3 [0:3];
-    generate
-        for (k = 0; k < 4; k = k + 1)
-            assign l3[k] = l2[2*k] ^ l2[2*k+1];
-    endgenerate
-
-    // level-4: 2 XORs
-    logic [WIDTH-1:0] l4 [0:1];
-    generate
-        for (k = 0; k < 2; k = k + 1)
-            assign l4[k] = l3[2*k] ^ l3[2*k+1];
-    endgenerate
-
-    // level-5: final XOR
-    assign sobol_out = l4[0] ^ l4[1];
-
-    //-------------------------------------------------------------------------
-    // 4) stream handshake: one-cycle latency
-    //-------------------------------------------------------------------------
     always_ff @(posedge clk or negedge rst_n)
-        if (!rst_n)      valid_out <= 1'b0;
-        else             valid_out <= valid_in;
+        if (!rst_n)        
+            valid_out <= 1'b0;
+        else               
+            valid_out <= valid_in;
 
 endmodule
