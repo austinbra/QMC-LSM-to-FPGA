@@ -1,4 +1,3 @@
-// Blocks:
 //   Sobol  ->  inverseCDF  ->  GBM_step  ->  regression3x3 ->  lsm_decision  ->  uart_bridge
 
 module top_mc_option_pricer #(
@@ -16,8 +15,8 @@ module top_mc_option_pricer #(
     // TODO: Instantiate MMCM/PLL if you need faster clock
 
     // -------------- UART bridge ----------------
-    uart_bridge #(.DEPTH(1024)) link (
-        .fast_clk(fast_clk),
+    uart_bridge #(.DEPTH(1024)) link (										//get inputs for all others
+        .fast_clk(fast_clk),												//choose if i want complie time or to input all values from UART
         .rst_n(rst_btn_n),
         .core_tx_valid(tx_valid), 
         .core_tx_data(tx_data), 
@@ -37,7 +36,7 @@ module top_mc_option_pricer #(
     logic sob_valid, z_valid, gbm_valid, reg_valid, lsm_valid;
 
     // Sobol
-    sobol #(.M(M)) sobol_i (
+    sobol #(.M(M)) sobol_i (									//fully understand
         .clk(clk),
 		.rst_n(rst_n),
 		.valid_in(sob_valid),
@@ -77,7 +76,7 @@ module top_mc_option_pricer #(
 		.rst_n(rst_n),
 		.valid_in(reg_valid),
 		.x_in(S_t),
-		.y_in(y_in),
+		.y_in(y_in), 															//what is
 		.valid_out(lsm_valid),
 		.beta(beta),
 		.solver_ready(solver_ready)
@@ -91,22 +90,25 @@ module top_mc_option_pricer #(
 		.S_t(S_t),
 		.beta(beta),
 		.strike(strike),
-		.disc(disc),
+		.disc(disc),															//calculate before inputting = exp( r * t_i * delta_t)
 		.valid_out(mean_ready),
 		.PV(PV)
     );
-
+	
+	logic [WIDTH-1:0] count;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             PV <= '0; 
+			count <= '0;
         end
         else if (mean_ready) begin
             PV <= PV + extended(x_in);
+			count <= count + 1;
         end
     end
     logic done;
     logic [WIDTH-1:0] cash_flow;
-    fxDiv #() div (
+    fxDiv #() div (													//only run once count == number of time steps
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(v2),
@@ -114,6 +116,40 @@ module top_mc_option_pricer #(
         .denominator(N),
         .result(cash_flow),
         .valid_out(done));
+
+
+	always_ff @(posedge clk or negedge rst_n) begin 							//implement
+        if (!rst_n) begin
+            state <= IDLE; start_solver<=0; valid_out<=0;
+        end else case (state)
+            IDLE:
+                if (count == N_SAMPLES) begin
+                    // Row 0
+                    mat_flat[0]=sum1; 
+                    mat_flat[2]=sumx2;  
+                    mat_flat[3]=sumy;
+                    // Row 1
+                    mat_flat[4]=sumx;  
+                    mat_flat[5]=sumx2;  
+                    mat_flat[6]=sumx3;  
+                    mat_flat[7]=sumxy;
+                    // Row 2
+                    mat_flat[8]=sumx2; 
+                    mat_flat[9]=sumx3;  
+                    mat_flat[10]=sumx4; 
+                    mat_flat[11]=sumx2y;
+                    start_solver <= 1'b1;
+                    state <= SOLVE;
+                  end
+            SOLVE:
+                
+            WAIT: 
+                
+        endcase
+    end
+
+
+
 
     // e.g. send cash_flow words to PC
     assign tx_valid = lsm_valid;
