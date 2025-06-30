@@ -17,7 +17,7 @@ module fxlnLUT #(
 );
 
     initial begin
-        $display("fxlnLUT initialized");
+        $display("../gen/fxlnLUT initialized");
     end
 
     always_ff @(posedge clk) begin

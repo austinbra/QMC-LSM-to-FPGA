@@ -15,7 +15,7 @@ module fxExpLUT #(
     // ROM for exp LUT
     localparam LUT_SIZE = 1 << LUT_BITS;
     logic [WIDTH-1:0] exp_lut [0:LUT_SIZE-1];
-    initial $readmemh("exp_lut_1024.mem", exp_lut);
+    initial $readmemh("../gen/exp_lut_1024.mem", exp_lut);
 
     // Index calculation: take LUT_BITS MSBs of fractional part
     logic [LUT_BITS-1:0] lut_index;
