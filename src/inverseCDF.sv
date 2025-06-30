@@ -2,10 +2,7 @@
 module inverseCDF #(
     parameter int WIDTH              = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT               = fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC,
-    parameter int MUL_LATENCY        = fpga_cfg_pkg::FP_MUL_LATENCY,
-    parameter int DIV_LATENCY        = fpga_cfg_pkg::FP_DIV_LATENCY,
-    parameter int SQRT_LATENCY       = fpga_cfg_pkg::FP_SQRT_LATENCY
+    parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC
 )(
     input logic clk,
     input logic rst_n,         

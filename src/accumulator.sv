@@ -17,7 +17,7 @@ module accumulator #(
     output logic                     valid_out,
     output logic signed [WIDTH-1:0]  beta [0:2],
 
-    // ready from 3×3 solver
+    // ready from solver
     input  logic                     solver_ready
 );
 
@@ -42,11 +42,11 @@ module accumulator #(
     // extra mults fed by x2 so they line-up with v_acc
     fxMul_always #() mul_x2_x (
         .clk(clk), .rst_n(rst_n), .valid_in(v_x2),
-        .a(x2), .b(x_in), .result(x3), .valid_out(/*open*/));
+        .a(x2), .b(x_in), .result(x3), .valid_out(/*unused*/));
 
     fxMul_always #() mul_x2_x2 (
         .clk(clk), .rst_n(rst_n), .valid_in(v_x2),
-        .a(x2), .b(x2), .result(x4), .valid_out(/*open*/));
+        .a(x2), .b(x2), .result(x4), .valid_out(/*unused*/));
 
     // ------------------------------------------------------------
     // 2) 64-bit accumulators

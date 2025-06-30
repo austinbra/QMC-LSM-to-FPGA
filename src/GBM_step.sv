@@ -1,11 +1,7 @@
 module GBM_step #(
     parameter int WIDTH              = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT               = fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC,
-    parameter int MUL_LATENCY_ALWAYS = fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY,
-    parameter int DIV_LATENCY        = fpga_cfg_pkg::FP_DIV_LATENCY,
-    parameter int SQRT_LATENCY       = fpga_cfg_pkg::FP_SQRT_LATENCY,
-    parameter int LUT_BITS           = fpga_cfg_pkg::FP_LUT_BITS
+    parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC
 )(
     input  logic                       clk,
     input  logic                       rst_n,
@@ -16,25 +12,24 @@ module GBM_step #(
     input  logic signed [WIDTH-1:0]    sigma,
     input  logic signed [WIDTH-1:0]    t,
     output logic                       valid_out,
-    output logic signed [WIDTH-1:0]    S_1
+    output logic signed [WIDTH-1:0]    S_t
 );
-    import fpga_cfg_pkg::*;
 
-    localparam signed [WIDTH-1:0] HALF_Q16 = 32'sd32768;
-    localparam signed [WIDTH-1:0] ONE_Q16  = 32'sh0001_0000;
+    localparam signed [WIDTH-1:0] HALF = 'sd32768;
+    localparam signed [WIDTH-1:0] ONE  = 'sh0001_0000;
 
     // ---------------------------
     // 1. DRIFT = (r-0.5σ²)·t
     // ---------------------------
     logic v1a, v1b, v2;
     logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_sigma2 (
+    fxMul_always #() mul_sigma2 (
         .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(sigma), .b(sigma), .valid_out(v1a), .result(sigma2)
     );
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_half (
-        .clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(sigma2), .b(HALF_Q16), .valid_out(v1b), .result(half_sigma2)
+    fxMul_always #() mul_half (
+        .clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(sigma2), .b(HALF), .valid_out(v1b), .result(half_sigma2)
     );
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_drift (
+    fxMul_always #() mul_drift (
         .clk(clk), .rst_n(rst_n), .valid_in(v1b), .a(r - half_sigma2), .b(t), .valid_out(v2), .result(drift)
     );
 
@@ -62,13 +57,13 @@ module GBM_step #(
     // ---------------------------
     logic v3a, v3b, v3c;
     logic signed [WIDTH-1:0] sqrt_t, sigma_sqrt_t, diffusion;
-    fxSqrt #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(DIV_LATENCY)) sqrt_blk (
+    fxSqrt #() sqrt_blk (
         .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(t), .valid_out(v3a), .sqrt_out(sqrt_t)
     );
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_sigma_sqrt (
+    fxMul_always #() mul_sigma_sqrt (
         .clk(clk), .rst_n(rst_n), .valid_in(v3a), .a(sqrt_t), .b(sigma), .valid_out(v3b), .result(sigma_sqrt_t)
     );
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_diffusion (
+    fxMul_always #() mul_diffusion (
         .clk(clk), .rst_n(rst_n), .valid_in(v3b), .a(sigma_sqrt_t), .b(z), .valid_out(v3c), .result(diffusion)
     );
 
@@ -121,14 +116,14 @@ module GBM_step #(
 
     logic v_exp_abs;
     logic signed [WIDTH-1:0] exp_abs;
-    fxExpLUT #(.WIDTH(WIDTH), .QINT(QINT), .LUT_BITS(LUT_BITS)) exp_lut (//main exp
+    fxExpLUT #() exp_lut (//main exp
         .clk(clk), .rst_n(rst_n), .valid_in(v_exp_arg), .a(exp_mag), .valid_out(v_exp_abs), .result(exp_abs)
     );
 
     logic v_recip;
     logic signed [WIDTH-1:0] exp_recip;
-    fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(DIV_LATENCY)) recip_div (//only when exp is negative
-        .clk(clk), .rst_n(rst_n), .valid_in(v_exp_abs && exp_neg_pipe[0]), .numerator(ONE_Q16), .denominator(exp_abs), .valid_out(v_recip), .result(exp_recip)
+    fxDiv #() recip_div (//only when exp is negative
+        .clk(clk), .rst_n(rst_n), .valid_in(v_exp_abs && exp_neg_pipe[0]), .numerator(ONE), .denominator(exp_abs), .valid_out(v_recip), .result(exp_recip)
     );
 
     logic v_pos_pipe[0:DIV_LATENCY-1];
@@ -157,8 +152,8 @@ module GBM_step #(
     //---------------------------
     // 5. OUTPUT PRICE S1
     // ---------------------------
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(MUL_LATENCY_ALWAYS)) mul_out (
-        .clk(clk), .rst_n(rst_n), .valid_in(v_exp_final), .a(exp_final), .b(S_0), .valid_out(valid_out), .result(S_1)
+    fxMul_always #() mul_out (
+        .clk(clk), .rst_n(rst_n), .valid_in(v_exp_final), .a(exp_final), .b(S_0), .valid_out(valid_out), .result(S_t)
     );
 
 endmodule
