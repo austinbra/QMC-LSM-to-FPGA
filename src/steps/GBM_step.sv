@@ -1,159 +1,181 @@
 module GBM_step #(
-    parameter int WIDTH              = fpga_cfg_pkg::FP_WIDTH,
-    parameter int QINT               = fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC
+    parameter int WIDTH       = fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT        = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC       = fpga_cfg_pkg::FP_QFRAC,
+    parameter int DIV_LATENCY = fpga_cfg_pkg::FP_DIV_LATENCY
 )(
     input  logic                       clk,
     input  logic                       rst_n,
+
+    // upstream handshake ----------------------------------------------------
     input  logic                       valid_in,
+    output logic                       ready_out,
+
+    // downstream handshake --------------------------------------------------
+    output logic                       valid_out,
+    input  logic                       ready_in,
+
+    // data ------------------------------------------------------------------
     input  logic signed [WIDTH-1:0]    z,
-    input  logic signed [WIDTH-1:0]    S_0,
+    input  logic signed [WIDTH-1:0]    S,
     input  logic signed [WIDTH-1:0]    r,
     input  logic signed [WIDTH-1:0]    sigma,
-    input  logic signed [WIDTH-1:0]    t,
-    output logic                       valid_out,
-    output logic signed [WIDTH-1:0]    S_t
+    input  logic signed [WIDTH-1:0]    dt,
+    output logic signed [WIDTH-1:0]    S_next
 );
 
-    localparam signed [WIDTH-1:0] HALF = 'sd32768;
-    localparam signed [WIDTH-1:0] ONE  = 'sh0001_0000;
+    // ----------------------------------------------------------------------
+    // 0. One-deep skid buffer to absorb upstream bursts
+    // ----------------------------------------------------------------------
+    typedef struct packed {
+        logic signed [WIDTH-1:0] z;
+        logic signed [WIDTH-1:0] S;
+        logic signed [WIDTH-1:0] r;
+        logic signed [WIDTH-1:0] sigma;
+        logic signed [WIDTH-1:0] dt;
+    } sample_t;
 
-    // ---------------------------
-    // 1. DRIFT = (r-0.5σ²)·t
-    // ---------------------------
-    logic v1a, v1b, v2;
+    sample_t in_buf;
+    logic    buf_valid;
+
+    // ready when buffer empty and internal pipe ready
+    wire pipe_ready = ready_in;
+    assign ready_out = ~buf_valid | pipe_ready;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            buf_valid <= 1'b0;
+        end else begin
+            // Load new sample when upstream is valid and we have space
+            if (valid_in && ready_out) begin
+                in_buf    <= '{z,S,r,sigma,dt};
+                buf_valid <= 1'b1;
+            end
+            // Drop buffer flag when sample finishes entire path
+            if (buf_valid && pipe_ready && valid_out) begin
+                buf_valid <= 1'b0;
+            end
+        end
+    end
+
+    // ----------------------------------------------------------------------
+    // 1. DRIFT branch :  (r – 0.5 σ²) * dt
+    // ----------------------------------------------------------------------
+    logic drift_v_in  = buf_valid;
+    logic drift_r_in;
+    logic drift_v_out;
     logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
-    fxMul_always #() mul_sigma2 (
-        .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(sigma), .b(sigma), .valid_out(v1a), .result(sigma2)
-    );
-    fxMul_always #() mul_half (
-        .clk(clk), .rst_n(rst_n), .valid_in(v1a), .a(sigma2), .b(HALF), .valid_out(v1b), .result(half_sigma2)
-    );
-    fxMul_always #() mul_drift (
-        .clk(clk), .rst_n(rst_n), .valid_in(v1b), .a(r - half_sigma2), .b(t), .valid_out(v2), .result(drift)
+
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_sigma2 (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (drift_v_in),     .ready_in (drift_r_in),
+        .valid_out(drift_v_out),    .ready_out(/*unused*/),
+        .a(in_buf.sigma), .b(in_buf.sigma),
+        .result(sigma2)
     );
 
-    logic drift_ready;
-    logic signed [WIDTH-1:0] drift_hold;
+    assign half_sigma2 = sigma2 >>> 1;   // multiply by 0.5 via shift
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            drift_ready <= 1'b0;
-            drift_hold  <= '0;
-        end else begin
-            // latch drift when complete
-            if (v2) begin
-                drift_hold  <= drift;
-                drift_ready <= 1'b1;
-            end
-            // clear when used with diffusion
-            if (drift_ready && diffusion_done_pulse)
-                drift_ready <= 1'b0;
-        end
-    end
-
-    // ---------------------------
-    // 2. DIFFUSION = σ√t·Z
-    // ---------------------------
-    logic v3a, v3b, v3c;
-    logic signed [WIDTH-1:0] sqrt_t, sigma_sqrt_t, diffusion;
-    fxSqrt #() sqrt_blk (
-        .clk(clk), .rst_n(rst_n), .valid_in(valid_in), .a(t), .valid_out(v3a), .sqrt_out(sqrt_t)
-    );
-    fxMul_always #() mul_sigma_sqrt (
-        .clk(clk), .rst_n(rst_n), .valid_in(v3a), .a(sqrt_t), .b(sigma), .valid_out(v3b), .result(sigma_sqrt_t)
-    );
-    fxMul_always #() mul_diffusion (
-        .clk(clk), .rst_n(rst_n), .valid_in(v3b), .a(sigma_sqrt_t), .b(z), .valid_out(v3c), .result(diffusion)
+    logic drift2_v, drift2_r;
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_drift (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (drift_v_out), .ready_in(drift2_r),
+        .valid_out(drift2_v),    .ready_out(/*unused*/),
+        .a(in_buf.r - half_sigma2), .b(in_buf.dt),
+        .result(drift)
     );
 
-    logic diffusion_done_pulse;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            diffusion_done_pulse <= 1'b0;
-        else
-            diffusion_done_pulse <= v3c;
-    end
+    // ----------------------------------------------------------------------
+    // 2. DIFFUSION branch : σ √dt · z
+    // ----------------------------------------------------------------------
+    logic diff_v_in = buf_valid;
+    logic diff_r_in;
+    logic diff_v_out;
+    logic signed [WIDTH-1:0] sqrt_dt, sigma_sqrt_dt, diffusion;
 
-    // ---------------------------
-    // 3. EXPONENT ARGUMENT
-    // ---------------------------
+    fxSqrt #(.WIDTH(WIDTH), .QINT(QINT)) sqrt_blk (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (diff_v_in),  .ready_in(diff_r_in),
+        .valid_out(diff_v_out), .ready_out(/*unused*/),
+        .y(in_buf.dt),
+        .sqrt_out(sqrt_dt)
+    );
+
+    logic diff2_v, diff2_r;
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_sigma_sqrt (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (diff_v_out), .ready_in(diff2_r),
+        .valid_out(diff2_v),    .ready_out(/*unused*/),
+        .a(sqrt_dt), .b(in_buf.sigma),
+        .result(sigma_sqrt_dt)
+    );
+
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_diffusion (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (diff2_v), .ready_in(1'b1),   // terminal branch
+        .valid_out(diffusion_v), .ready_out(/*open*/),
+        .a(sigma_sqrt_dt), .b(in_buf.z),
+        .result(diffusion)
+    );
+
+    // ----------------------------------------------------------------------
+    // 3. Join drift + diffusion  (requires both branches ready)
+    // ----------------------------------------------------------------------
+    logic join_valid = drift2_v & diffusion_v;
+    logic join_ready = pipe_ready;             // back-pressure from stage 4
+
+    // No additional buffering: both sub-branches stay asserted until accepted
+    assign drift2_r     = join_ready & diffusion_v;
+    assign diff2_r      = join_ready & drift2_v;
+    assign drift_r_in   = 1'b1;                // early stages never stall
+    assign diff_r_in    = 1'b1;
+
     logic signed [WIDTH-1:0] exp_arg;
-    logic v_exp_arg;
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            exp_arg  <= '0;
-            v_exp_arg <= 1'b0;
-        end else begin
-            v_exp_arg <= diffusion_done_pulse && drift_ready;
-            if (diffusion_done_pulse && drift_ready)
-                exp_arg <= diffusion + drift_hold;
-        end
+    always_ff @(posedge clk) begin
+        if (join_valid & join_ready)
+            exp_arg <= drift + diffusion;
     end
 
-    // ---------------------------
-    // 4. EXP CALCULATION
-    // ---------------------------
-    logic signed [WIDTH-1:0] exp_mag;
-    logic exp_neg_pipe[0:DIV_LATENCY];
-    integer j;
+    // ----------------------------------------------------------------------
+    // 4.  e^(exp_arg)  (CORDIC-lite LUT) and reciprocal for negative arg
+    // ----------------------------------------------------------------------
+    logic signed [WIDTH-1:0] abs_arg;
+    logic sign_bit;
 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (j = 0; j <= DIV_LATENCY; j++)
-                exp_neg_pipe[j] <= 1'b0;
-            exp_mag <= '0;
-        end else begin
-            if (v_exp_arg) begin
-                exp_neg_pipe[0] <= exp_arg[WIDTH-1];
-                exp_mag <= exp_arg[WIDTH-1] ? -exp_arg : exp_arg;
-            end
-            for (j = 1; j <= DIV_LATENCY; j++)
-                exp_neg_pipe[j] <= exp_neg_pipe[j-1];
-        end
-    end
+    assign sign_bit = exp_arg[WIDTH-1];
+    assign abs_arg  = sign_bit ? -exp_arg : exp_arg;
 
-    logic v_exp_abs;
-    logic signed [WIDTH-1:0] exp_abs;
-    fxExpLUT #() exp_lut (//main exp
-        .clk(clk), .rst_n(rst_n), .valid_in(v_exp_arg), .a(exp_mag), .valid_out(v_exp_abs), .result(exp_abs)
+    logic exp_v, exp_r, recip_v;
+    logic signed [WIDTH-1:0] e_pos, e_neg;
+
+    fxExpLUT #(.WIDTH(WIDTH), .QINT(QINT)) explut (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (join_valid), .ready_in(exp_r),
+        .valid_out(exp_v),      .ready_out(/*unused*/),
+        .a(abs_arg),
+        .result(e_pos)
     );
 
-    logic v_recip;
-    logic signed [WIDTH-1:0] exp_recip;
-    fxDiv #() recip_div (//only when exp is negative
-        .clk(clk), .rst_n(rst_n), .valid_in(v_exp_abs && exp_neg_pipe[0]), .numerator(ONE), .denominator(exp_abs), .valid_out(v_recip), .result(exp_recip)
+    fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(DIV_LATENCY)) recip (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (exp_v),   .ready_in(1'b1),
+        .valid_out(recip_v), .ready_out(exp_r),
+        .numerator({1'b0, {QFRAC{1'b1}}}),  // 1.0 in Q format
+        .denominator(e_pos),
+        .result(e_neg)
     );
 
-    logic v_pos_pipe[0:DIV_LATENCY-1];
-    logic signed [WIDTH-1:0] exp_abs_pipe[0:DIV_LATENCY-1];
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            for (j = 0; j < DIV_LATENCY; j++) begin
-                v_pos_pipe[j] <= 1'b0;
-                exp_abs_pipe[j] <= '0;
-            end
-        end else begin
-            v_pos_pipe[0] <= v_exp_abs && ~exp_neg_pipe[0];
-            exp_abs_pipe[0] <= exp_abs;
-            for (j = 1; j < DIV_LATENCY; j++) begin
-                v_pos_pipe[j] <= v_pos_pipe[j-1];
-                exp_abs_pipe[j] <= exp_abs_pipe[j-1];
-            end
-        end
-    end
+    wire signed [WIDTH-1:0] e_final = sign_bit ? e_neg : e_pos;
 
-    logic v_exp_final;
-    logic signed [WIDTH-1:0] exp_final;
-    assign v_exp_final = exp_neg_pipe[DIV_LATENCY] ? v_recip : v_pos_pipe[DIV_LATENCY-1];
-    assign exp_final   = exp_neg_pipe[DIV_LATENCY] ? exp_recip : exp_abs_pipe[DIV_LATENCY-1];
-
-    //---------------------------
-    // 5. OUTPUT PRICE S1
-    // ---------------------------
-    fxMul_always #() mul_out (
-        .clk(clk), .rst_n(rst_n), .valid_in(v_exp_final), .a(exp_final), .b(S_0), .valid_out(valid_out), .result(S_t)
+    // ----------------------------------------------------------------------
+    // 5.  Final price  S_next = S · e^(drift+diff)
+    // ----------------------------------------------------------------------
+    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_price (
+        .clk(clk), .rst_n(rst_n),
+        .valid_in (recip_v),  .ready_in(pipe_ready),
+        .valid_out(valid_out), .ready_out(/*unused*/),
+        .a(e_final), .b(in_buf.S),
+        .result(S_next)
     );
 
 endmodule

@@ -7,9 +7,14 @@ module sobol_flex #(
     input  logic                         rst_n,
 
     input  logic                         valid_in,
-    input  logic [WIDTH-1:0]             idx_in,       // path index (row)
+    output logic                         ready_out,
+
+    input  logic [WIDTH-1:0]             idx_in,       // current path index (row)
     input  logic [$clog2(M)-1:0]         dim_in,       // current time-step (col)
-    output logic                         valid_out,
+
+    output logic                         valid_out, //to downstream
+    input  logic                         ready_in, //from downstream
+
     output logic [WIDTH-1:0]             sobol_out
 );
 
@@ -37,24 +42,46 @@ module sobol_flex #(
     localparam int LEVELS = (WIDTH <= 1) ? 1 : $clog2(WIDTH);
 
     // Stages; example: stage[l][i] holds XOR result at level l, element i
-    logic [WIDTH-1:0] stage [0:LEVELS] ;
+    logic [WIDTH-1:0] stage [0:LEVELS][0:WIDTH-1];
     generate
         for (k = 0; k < WIDTH; k++)
             assign stage[0][k] = leaf[k];
 
         //xor everything together
         for (k = 0; k < LEVELS; k++) begin : GEN_LEVEL
-            for (int j = 0; j < (WIDTH >> (k+1)); j = j + 1) begin : GEN_PAIR
+            for (int j = 0; j < (WIDTH >> (k+1)); j++) begin : GEN_PAIR
                 assign stage[k+1][j] = stage[k][2*j] ^ stage[k][2*j+1];
             end
         end
     endgenerate
-    assign sobol_out = stage[LEVELS][0];  // one 32-bit fraction on the 0–1 line, it lands where the biggest gap would have been split in half.
+    
+    wire [WIDTH-1:0] sobol_raw = stage[LEVELS][0];
 
-    always_ff @(posedge clk or negedge rst_n)
-        if (!rst_n)        
-            valid_out <= 1'b0;
-        else               
-            valid_out <= valid_in;
+    // ---------------------------------------------------------------------
+    //one deep skid buffer for ready/valid
+    // ---------------------------------------------------------------------
+    logic             valid_reg;
+    logic [WIDTH-1:0] sobol_reg;
+
+    assign ready_out = ~valid_reg;     // space available when buffer empty
+    assign valid_out =  valid_reg;
+    assign sobol_out =  sobol_reg;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            valid_reg <= 1'b0;
+        end
+        else begin
+            // load new sample when upstream valid and buffer empty
+            if (valid_in && ready_out) begin
+                sobol_reg <= sobol_raw;
+                valid_reg <= 1'b1;
+            end
+            // release buffer after downstream consumes
+            else if (valid_reg && ready_in) begin
+                valid_reg <= 1'b0;
+            end
+        end
+    end
 
 endmodule

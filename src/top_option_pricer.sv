@@ -40,7 +40,7 @@ module top_mc_option_pricer #(
         .clk(clk),
 		.rst_n(rst_n),
 		.valid_in(sob_valid),
-		.N(N),
+		.idx_in(idx_in),
 		.dim_in(dim_in),
 		.valid_out(z_valid),
 		.sobol_out(sobol_out)
