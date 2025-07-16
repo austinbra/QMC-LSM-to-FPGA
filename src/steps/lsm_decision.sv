@@ -9,7 +9,7 @@ module lsm_decision #(
     //per-path inputs
     input  logic                     valid_in,   // high once per path at time-t
     input  logic signed [WIDTH-1:0]  S_t,
-    input  logic signed [WIDTH-1:0]  beta [0:2]
+    input  logic signed [WIDTH-1:0]  beta [0:2],
     input  logic signed [WIDTH-1:0]  strike,     // K or strike price
     input  logic signed [WIDTH-1:0]  disc,       // discount to current day = exp(-r * t)
 
@@ -41,7 +41,9 @@ module lsm_decision #(
     // immediate exercise payoff
     //-----------------------------------------
     logic signed [WIDTH-1:0] payoff;
-    always_comb payoff = (strike > S_t) ? (strike - S_t) : '0;
+    always_comb begin
+        payoff = (strike > S_t) ? strike - S_t : '0;
+    end
 
     // decision & output cash-flow
     //-----------------------------------------

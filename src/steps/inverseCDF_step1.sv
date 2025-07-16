@@ -19,7 +19,7 @@ module inverseCDF_step1 #(
     output logic negate                 // If 1, final z-score should be negated
 );
 
-    localparam signed [WIDTH-1:0] HALF = 'sd32768; // 0.5
+    localparam signed [WIDTH-1:0] HALF = 1'sd1 << (QFRAC-1); // 0.5
 
     logic [WIDTH-1:0] x_reg;
     logic negate_reg, valid_reg;

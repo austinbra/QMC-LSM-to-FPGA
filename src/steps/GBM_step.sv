@@ -39,7 +39,7 @@ module GBM_step #(
     logic    buf_valid;
 
     // ready when buffer empty and internal pipe ready
-    wire pipe_ready = ready_in;
+
     assign ready_out = ~buf_valid | pipe_ready;
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -66,7 +66,7 @@ module GBM_step #(
     logic drift_v_out;
     logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
 
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_sigma2 (
+    fxMul #(.LATENCY(2)) mul_sigma2 (
         .clk(clk), .rst_n(rst_n),
         .valid_in (drift_v_in),     .ready_in (drift_r_in),
         .valid_out(drift_v_out),    .ready_out(/*unused*/),
@@ -77,10 +77,10 @@ module GBM_step #(
     assign half_sigma2 = sigma2 >>> 1;   // multiply by 0.5 via shift
 
     logic drift2_v, drift2_r;
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_drift (
+    fxMul #(.LATENCY(2)) mul_drift (
         .clk(clk), .rst_n(rst_n),
         .valid_in (drift_v_out), .ready_in(drift2_r),
-        .valid_out(drift2_v),    .ready_out(/*unused*/),
+        .valid_out(drift2_v),    .ready_out(drift_r_in),
         .a(in_buf.r - half_sigma2), .b(in_buf.dt),
         .result(drift)
     );
@@ -89,31 +89,30 @@ module GBM_step #(
     // 2. DIFFUSION branch : σ √dt · z
     // ----------------------------------------------------------------------
     logic diff_v_in = buf_valid;
-    logic diff_r_in;
-    logic diff_v_out;
+    logic diff_r_in, diff_v_out, mul_reg;
     logic signed [WIDTH-1:0] sqrt_dt, sigma_sqrt_dt, diffusion;
 
-    fxSqrt #(.WIDTH(WIDTH), .QINT(QINT)) sqrt_blk (
+    fxSqrt #() sqrt_blk (
         .clk(clk), .rst_n(rst_n),
         .valid_in (diff_v_in),  .ready_in(diff_r_in),
-        .valid_out(diff_v_out), .ready_out(/*unused*/),
+        .valid_out(diff_v_out), .ready_out(drift2_r),
         .y(in_buf.dt),
         .sqrt_out(sqrt_dt)
     );
 
     logic diff2_v, diff2_r;
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_sigma_sqrt (
+    fxMul #(.LATENCY(2)) mul_sigma_sqrt (
         .clk(clk), .rst_n(rst_n),
         .valid_in (diff_v_out), .ready_in(diff2_r),
-        .valid_out(diff2_v),    .ready_out(/*unused*/),
+        .valid_out(diff2_v),    .ready_out(diff_r_in),
         .a(sqrt_dt), .b(in_buf.sigma),
         .result(sigma_sqrt_dt)
     );
 
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_diffusion (
+    fxMul #(.LATENCY(2)) mul_diffusion (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (diff2_v), .ready_in(1'b1),   // terminal branch
-        .valid_out(diffusion_v), .ready_out(/*open*/),
+        .valid_in (diff2_v), .ready_in(mul_reg),
+        .valid_out(diffusion_v), .ready_out(diff2_r),
         .a(sigma_sqrt_dt), .b(in_buf.z),
         .result(diffusion)
     );
@@ -132,7 +131,9 @@ module GBM_step #(
 
     logic signed [WIDTH-1:0] exp_arg;
     always_ff @(posedge clk) begin
-        if (join_valid & join_ready)
+        if (!rst_n)
+            exp_arg <= '0;
+        else if (join_valid & join_ready)
             exp_arg <= drift + diffusion;
     end
 
@@ -145,21 +146,21 @@ module GBM_step #(
     assign sign_bit = exp_arg[WIDTH-1];
     assign abs_arg  = sign_bit ? -exp_arg : exp_arg;
 
-    logic exp_v, exp_r, recip_v;
+    logic exp_v, exp_reg, recip_v;
     logic signed [WIDTH-1:0] e_pos, e_neg;
 
-    fxExpLUT #(.WIDTH(WIDTH), .QINT(QINT)) explut (
+    fxExpLUT #() explut (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (join_valid), .ready_in(exp_r),
-        .valid_out(exp_v),      .ready_out(/*unused*/),
+        .valid_in (join_valid), .ready_in(exp_reg),
+        .valid_out(exp_v),      .ready_out(mul_reg),
         .a(abs_arg),
         .result(e_pos)
     );
 
-    fxDiv #(.WIDTH(WIDTH), .QINT(QINT), .LATENCY(DIV_LATENCY)) recip (
+    fxDiv #() recip (
         .clk(clk), .rst_n(rst_n),
         .valid_in (exp_v),   .ready_in(1'b1),
-        .valid_out(recip_v), .ready_out(exp_r),
+        .valid_out(recip_v), .ready_out(exp_reg),
         .numerator({1'b0, {QFRAC{1'b1}}}),  // 1.0 in Q format
         .denominator(e_pos),
         .result(e_neg)
@@ -170,9 +171,9 @@ module GBM_step #(
     // ----------------------------------------------------------------------
     // 5.  Final price  S_next = S · e^(drift+diff)
     // ----------------------------------------------------------------------
-    fxMul_always #(.WIDTH(WIDTH), .QINT(QINT)) mul_price (
+    fxMul #(.LATENCY(2)) mul_price (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (recip_v),  .ready_in(pipe_ready),
+        .valid_in (recip_v),  .ready_in(ready_in),
         .valid_out(valid_out), .ready_out(/*unused*/),
         .a(e_final), .b(in_buf.S),
         .result(S_next)

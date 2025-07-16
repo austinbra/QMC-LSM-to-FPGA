@@ -1,76 +1,70 @@
-// fxMul.sv
-// Burst / parallel work -> fxMul (need separate done flags)
-module fxMul #(
-    parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH,                 // total bits (signed)
-    parameter int QINT     = fpga_cfg_pkg::FP_QINT,                 // integer bits
-    parameter int QFRAC    = fpga_cfg_pkg::FP_QFRAC,       // fractional bits
-    parameter int LATENCY  = fpga_cfg_pkg::FP_MUL_LATENCY                   // pipeline depth
+//Streaming / one-per-path work -> fxMul_always (handshake)
+(* use_dsp = "yes" *) module fxMul_always #(
+    parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH ,
+    parameter int QINT     = fpga_cfg_pkg::FP_QINT  ,
+    parameter int QFRAC    = fpga_cfg_pkg::FP_QFRAC ,
+    parameter int LATENCY  = fpga_cfg_pkg::FP_MUL_LATENCY
 )(
-    input  logic                  clk,
-    input  logic                  rst_n,        // active-low reset
-    input  logic                  valid_in,        // pulse to launch a multiply
-    input  logic signed [WIDTH-1:0] a,           // Q-format operand A
-    input  logic signed [WIDTH-1:0] b,           // Q-format operand B
-    output logic signed [WIDTH-1:0] result,      // Q-format product
-    output logic                  valid_out          // pulses true when result is valid
+    input  logic                       clk,
+    input  logic                       rst_n,
+
+    input  logic                       valid_in,   // sample on a,b is valid
+    output logic                       ready_out,  // this block can accept it
+    input  logic                       ready_in,   // downstream ready for result
+    output logic                       valid_out,  // result is valid
+
+    input  logic signed [WIDTH-1:0]    a,
+    input  logic signed [WIDTH-1:0]    b,
+    output logic signed [WIDTH-1:0]    result
 );
+(* use_dsp = "yes" *) 
 
-    // ------------------------------------------------------------
-	// helper: return 1 if the upper bits are just sign-extension
-	// ------------------------------------------------------------
-	localparam int UBIT = WIDTH - QFRAC;
-    function automatic bit fits_Q16_16
-        (input logic signed [2*WIDTH-1:0] x);
-        logic signed [UBIT-1:0] upper_bits;
-        logic signed [UBIT-1:0] sign_bits;
-        begin
-            upper_bits = x[2*WIDTH-1 : WIDTH+QFRAC];
-            sign_bits  = { UBIT{ x[WIDTH+QFRAC-1] } };
-            fits_Q16_16 = (upper_bits == sign_bits);
-        end
-    endfunction
 
-    localparam int RAWW = 2*WIDTH;
-    logic signed [RAWW-1:0] raw_mul;
 
-    always_comb begin
-        raw_mul = $signed(a) * $signed(b);
-        assert (fits_Q16_16(raw_mul))
-    		else $error("fxMul overflow: a=%0d b=%0d at %0t", a, b, $time);
+    // Sanity check
+    initial begin
+        assert (LATENCY >= 1)
+            else $error("fxMul_always: LATENCY must be ≥1");
+        assert (QFRAC > 0)
+            else $error("fxMul_always: QFRAC must be >0");
     end
 
-    logic signed [RAWW-1:0] pipe_mul [0:LATENCY];
-    logic valid_pipe [0:LATENCY];
 
-    integer i;
+    // 1.  Raw product & pipeline registers
+    logic [LATENCY-1:0] v_pipe;
+    logic signed [WIDTH-1:0] d_pipe [LATENCY-1:0];
+
+    //stall whole pipe if tail can't drain
+    wire shift_en = ready_in | ~v_pipe[LATENCY-1];
+
+
+    logic signed [2*WIDTH-1:0] raw_prod = a * b;  // Full-width product to avoid overflow
+    logic signed [WIDTH-1:0] prod_scaled = (raw_prod + (1 << (QFRAC-1))) >>> QFRAC;  // Round and truncate to WIDTH
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            for (i = 0; i <= LATENCY; i = i + 1) begin
-                pipe_mul[i]  <= '0;
-                valid_pipe[i]<= 1'b0;
-            end
-            result <= '0;
-            valid_out   <= 1'b0;
-        end else begin
-
-            valid_pipe[0] <= valid_in;
-            for (i = 1; i <= LATENCY; i = i + 1)
-                valid_pipe[i] <= valid_pipe[i-1];
-
-            // inject raw_mul on valid_in
-            if (valid_in)
-                pipe_mul[0] <= raw_mul;
-            else
-                pipe_mul[0] <= pipe_mul[0];
-
-            // shift pipeline
-            for (i = 1; i <= LATENCY; i = i + 1)
-                pipe_mul[i] <= pipe_mul[i-1];
-
-            valid_out <= valid_pipe[LATENCY];
-            if (valid_pipe[LATENCY])
-                result <= pipe_mul[LATENCY][QFRAC +: WIDTH];
+            v_pipe <= '0;
         end
+        else if (shift_en) begin
+            v_pipe <= {v_pipe[LATENCY-2:0], (valid_in && ready_out)};
+            d_pipe[0] <= prod_scaled;
+            if (LATENCY > 1) d_pipe[1] <= d_pipe[0];
+            if (LATENCY > 2) d_pipe[2] <= d_pipe[1];
+            if (LATENCY > 3) d_pipe[3] <= d_pipe[2];
+            //extend if needed
+        end
+    end
+
+    // Handshake outputs
+    assign valid_out = v_pipe[LATENCY-1];
+    assign p = d_pipe[LATENCY-1];
+
+    assign ready_out = ~v_pipe[0] | shift_en;
+    assign result = d_pipe[LATENCY-1];
+
+    initial begin
+    // Assertions – catch lost back-pressure during sim
+        assert property (@(posedge clk) disable iff(!rst_n) valid_out & ~ready_in |-> ##1 ~ready_out)
+            else $error("fxMul_always: back-pressure lost – pipeline overwrite");
     end
 
 endmodule

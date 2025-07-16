@@ -8,24 +8,24 @@ module sobol_flex #(
 
     input  logic                         valid_in,
     output logic                         ready_out,
-
-    input  logic [WIDTH-1:0]             idx_in,       // current path index (row)
-    input  logic [$clog2(M)-1:0]         dim_in,       // current time-step (col)
-
     output logic                         valid_out, //to downstream
     input  logic                         ready_in, //from downstream
 
+    input  logic [WIDTH-1:0]             idx_in,       // current path index (row)
+    input  logic [$clog2(M)-1:0]         dim_in,       // current time-step (col)
     output logic [WIDTH-1:0]             sobol_out
 );
 
     // Direction-number memory :  M * WIDTH words
     (* ram_style = "block" *)
     logic [WIDTH-1:0]  direction [0:M*WIDTH-1];
-    initial $readmemh("../gen/direction.mem", direction);
+    initial $readmemh("../gen/direction.hex", direction);
 
 
     logic [WIDTH-1:0] gray;
-    always_comb gray = idx_in ^ (idx_in >> 1); 
+    always_comb begin
+        gray = idx_in ^ (idx_in >> 1); 
+    end
     //one on/off shifts the new dot into the biggest available gap.
     //Because the recipe is deterministic, the generator never stores the earlier points.
     //You just feed in the row index i and the formula dictates the new coordinate

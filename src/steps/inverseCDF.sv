@@ -4,7 +4,7 @@ module inverseCDF #(
     parameter int QINT               = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC              = fpga_cfg_pkg::FP_QFRAC,
     parameter int SQRT_LATENCY       = fpga_cfg_pkg::FP_SQRT_LATENCY,
-    parameter int MUL_ALWAYS_LATENCY = fpga_cfg_pkg::FP_MUL_ALWAYS_LATENCY
+    parameter int MUL_LATENCY        = fpga_cfg_pkg::FP_MUL_LATENCY
 
 )(
     input logic clk,
@@ -23,8 +23,8 @@ module inverseCDF #(
 
     localparam signed [WIDTH-1:0] NEG_TWO = -((1'sd2) << QFRAC);
     localparam int STEP1_LATENCY = 1;
-    localparam int LN_LATENCY = 1;
-    localparam int NEG_DELAY = STEP1_LATENCY + LN_LATENCY + MUL_ALWAYS_LATENCY + SQRT_LATENCY;
+    localparam int LN_LATENCY = 2;
+    localparam int NEG_DELAY = STEP1_LATENCY + LN_LATENCY + MUL_LATENCY + SQRT_LATENCY;
 
 
     // Step 1: Convert sobol sequence number to (0,0.5] saving 

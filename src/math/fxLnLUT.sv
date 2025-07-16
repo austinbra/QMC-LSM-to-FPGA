@@ -1,84 +1,68 @@
-// LUT for ln(x), for 0.000015 <= x <= 0.5
 module fxlnLUT #(
     parameter WIDTH = fpga_cfg_pkg::FP_WIDTH,
     parameter QINT = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC,
-    parameter LUT_BITS = fpga_cfg_pkg::FP_LUT_BITS   // 1024 entries in LUT
+    parameter LUT_BITS = 12 
 )(
     input logic clk,
     input logic rst_n,
-    input logic valid_in,
-    /* verilator lint_off UNUSED */
-    input logic [WIDTH-1:0] x,
-    /* verilator lint_on UNUSED */
 
+    input  logic valid_in,
+    output logic ready_out,
     output logic valid_out,
-    output logic [WIDTH-1:0] ln_out
+    input  logic ready_in,
+
+    input logic [WIDTH-1:0] a,
+    output logic [WIDTH-1:0] result
 );
+    
+    //skid buffer
+    logic v_reg;
+    assign ready_out = ~v_reg | ready_in;
 
-    initial begin
-        $display("../gen/fxlnLUT initialized");
-    end
+    //range 2^‑LUT_BITS to 2
+    localparam [WIDTH-1:0] A_MIN = 1 << (QFRAC-LUT_BITS);
+    localparam [WIDTH-1:0] A_MAX = 2 << QFRAC;
 
-    always_ff @(posedge clk) begin
-        if (valid_in)
-            $display("Accessing LUT[%0d] = %0d (0x%08X)", index, lut[index], lut[index]);
-    end
-
-        logic [WIDTH-1:0] lut [0:(1 << LUT_BITS) - 1];
-        initial $readmemh("gen/ln_lut_q16.hex", lut);
-
-        // Extract upper 10 fractional bits as index (e.g: x[15:6])
-        /* verilator lint_off UNUSED */
-        logic [LUT_BITS-1:0] index;
-        /* verilator lint_on UNUSED */
-            
-        // Map x in [x_min, x_max] to index in [0, 1023]
-        // x in Q16.16, x_min = 0.000015 * 65536 ≈ 1, x_max = 0.5 * 65536 = 32768
-        localparam logic [WIDTH-1:0] X_MIN = 32'd1;
-        localparam logic [WIDTH-1:0] X_MAX = 32'd32768;
-        localparam logic [WIDTH-1:0] X_RANGE = X_MAX - X_MIN;
-        /* verilator lint_off UNUSED */
-        logic [WIDTH + LUT_BITS - 1:0] scaled_index;
-        /* verilator lint_on UNUSED */
-
-        logic [WIDTH + LUT_BITS - 1:0] x_ext, x_min_ext, x_range_ext;
-
-        /* verilator lint_off WIDTH */
-        assign x_ext       = x;
-        assign x_min_ext   = X_MIN;
-        assign x_range_ext = X_RANGE;
-        /* verilator lint_on WIDTH */
-
-        always_comb begin
-            if (x <= X_MIN)
-                index = 0;
-            else if (x >= X_MAX)
-                index = (1 << LUT_BITS) - 1;
-            else begin
-                scaled_index = ((x_ext - x_min_ext) * ((1 << LUT_BITS) - 1)) / x_range_ext;
-                index = scaled_index[LUT_BITS-1:0]; 
-            end 
-        end
-
-        logic [WIDTH-1:0] ln_val;
-        always_ff @(posedge clk) begin
-            if (!rst_n)
-                ln_val <= 0;
-            else if (valid_in)
-                ln_val <= lut[index];
-        end
-
-        assign ln_out = ln_val;
-        // Delay valid signal by 1 cycle to match when ln_val is ready
-        logic v1;
-        always_ff @(posedge clk) begin
-            if (!rst_n)
-                v1 <= 1'b0;
+    logic [WIDTH-1:0] a_bound;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) 
+            a_bound <= '0;
+        else if (valid_in && ready_out) begin
+            if (a < A_MIN) 
+                a_bound <= A_MIN;
+            else if (a > A_MAX)
+                a_bound <= A_MAX;
             else
-                v1 <= valid_in;
+                a_bound <= a;
         end
+    end
 
-        assign valid_out = v1;
+    // BRAM lookup
+    wire [LUT_BITS-1:0] lut_index = a_bound[QFRAC-1 -: LUT_BITS];
+
+    (* rom_style="block" *)
+    logic [WIDTH-1:0] lut [0:(1<<LUT_BITS)-1];
+    initial $readmemh("../gen/ln_lut_4096.hex", lut);
+
+    logic signed [WIDTH-1:0] result_reg;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) 
+            result_reg <= '0;
+        else if (valid_in && ready_out)
+            result_reg <= (a_bound < (1 << QFRAC)) ? -lut[lut_index] : lut[lut_index];  // Negate for ln < 0
+    end
+
+    // Handshake
+    wire shift_en = ready_in | ~v_reg;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) 
+            v_reg <= '0;
+        else if (shift_en) 
+            v_reg <= valid_in && ready_out;
+    end
+
+    assign valid_out = v_reg;
+    assign result = result_reg;
 
 endmodule
