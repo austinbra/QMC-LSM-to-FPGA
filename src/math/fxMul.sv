@@ -64,7 +64,7 @@
     initial begin
     // Assertions – catch lost back-pressure during sim
         assert property (@(posedge clk) disable iff(!rst_n) valid_out & ~ready_in |-> ##1 ~ready_out)
-            else $error("fxMul_always: back-pressure lost – pipeline overwrite");
+            else $error("fxMul_always: back-pressure lost - pipeline overwrite");
     end
 
 endmodule

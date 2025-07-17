@@ -20,11 +20,31 @@ module fxDiv #(
 );
 
 //skid buffer
+    logic skid_valid;
+    logic signed [WIDTH-1:0] skid_num_reg;
+    logic signed [WIDTH-1:0] skid_den_reg;
+
+    wire accept_to_skid = valid_in && ready_out && !skid_valid;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            skid_valid <= 1'b0;
+            skid_num_reg <= '0;
+            skid_den_reg <= '0;
+        end else if (accept_to_skid) begin
+            skid_num_reg <= numerator;
+            skid_den_reg <= denominator == 0 ? (1 <<< QFRAC) : denominator;
+            skid_valid <= 1'b1;
+        end else if (ready_in && skid_valid) begin
+            skid_valid <= 1'b0;
+        end
+    end
+//valid signal pipeline
     logic [LATENCY-1:0] valid_pipe;
     wire  shift_en = ready_in | ~valid_pipe[LATENCY-1];
     assign ready_out = ~valid_pipe[0] | shift_en;
 
-    // Input staging
+// Input staging
     logic signed [WIDTH-1:0] num_reg, den_reg;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
