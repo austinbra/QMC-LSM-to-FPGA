@@ -2,20 +2,17 @@ module GBM_step #(
     parameter int WIDTH       = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT        = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC       = fpga_cfg_pkg::FP_QFRAC,
-    parameter int DIV_LATENCY = fpga_cfg_pkg::FP_DIV_LATENCY
+    parameter int DIV_LATENCY = fpga_cfg_pkg::FP_DIV_LATENCY,
+    parameter int LANE_ID = 0
 )(
     input  logic                       clk,
     input  logic                       rst_n,
 
-    // upstream handshake ----------------------------------------------------
     input  logic                       valid_in,
     output logic                       ready_out,
-
-    // downstream handshake --------------------------------------------------
     output logic                       valid_out,
     input  logic                       ready_in,
 
-    // data ------------------------------------------------------------------
     input  logic signed [WIDTH-1:0]    z,
     input  logic signed [WIDTH-1:0]    S,
     input  logic signed [WIDTH-1:0]    r,
@@ -23,6 +20,7 @@ module GBM_step #(
     input  logic signed [WIDTH-1:0]    dt,
     output logic signed [WIDTH-1:0]    S_next
 );
+    localparam signed [WIDTH-1:0] ONE = 1 << QFRAC;
 
     // ----------------------------------------------------------------------
     // 0. One-deep skid buffer to absorb upstream bursts
@@ -36,105 +34,118 @@ module GBM_step #(
     } sample_t;
 
     sample_t in_buf;
-    logic    buf_valid;
-
-    // ready when buffer empty and internal pipe ready
-
-    assign ready_out = ~buf_valid | pipe_ready;
+    logic buf_valid;
+    logic shift_en = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            buf_valid <= 1'b0;
+            buf_valid <= 0;
+            in_buf <= '{0, 0, 0, 0, 0};  // Explicit reset
         end else begin
-            // Load new sample when upstream is valid and we have space
             if (valid_in && ready_out) begin
-                in_buf    <= '{z,S,r,sigma,dt};
-                buf_valid <= 1'b1;
-            end
-            // Drop buffer flag when sample finishes entire path
-            if (buf_valid && pipe_ready && valid_out) begin
-                buf_valid <= 1'b0;
+                in_buf <= '{z, S, r, sigma, dt};
+                buf_valid <= 1;
+            end else if (shift_en) begin
+                buf_valid <= 0;
             end
         end
     end
 
+    logic mul_sigma2_ready, mul_drift_ready, sqrt_blk_ready, mul_sigma_sqrt_ready, mul_diffusion_ready, explut_ready, recip_ready, mul_price_ready;
+    logic drift_barrier = mul_sigma2_ready && mul_drift_ready;
+    logic diffusion_barrier = sqrt_blk_ready && mul_sigma_sqrt_ready && mul_diffusion_ready;
+    logic exp_barrier = explut_ready && recip_ready;
+
+    assign ready_out = (!buf_valid || (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready));
     // ----------------------------------------------------------------------
     // 1. DRIFT branch :  (r – 0.5 σ²) * dt
     // ----------------------------------------------------------------------
-    logic drift_v_in  = buf_valid;
-    logic drift_r_in;
-    logic drift_v_out;
+    logic drift_v_in = buf_valid && shift_en;
+    logic drift_v_mid, drift_v_out;
     logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
+    
 
     fxMul #(.LATENCY(2)) mul_sigma2 (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in (drift_v_in),     .ready_in (drift_r_in),
-        .valid_out(drift_v_out),    .ready_out(/*unused*/),
-        .a(in_buf.sigma), .b(in_buf.sigma),
-        .result(sigma2)
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .valid_in  (drift_v_in),
+        .ready_out (mul_sigma2_ready),
+        .valid_out (drift_v_mid),
+        .ready_in  (mul_drift_ready),  // Chain to next mul in branch
+        .a         (in_buf.sigma),
+        .b         (in_buf.sigma),
+        .result    (sigma2)
     );
 
     assign half_sigma2 = sigma2 >>> 1;   // multiply by 0.5 via shift
+    
 
-    logic drift2_v, drift2_r;
     fxMul #(.LATENCY(2)) mul_drift (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (drift_v_out), .ready_in(drift2_r),
-        .valid_out(drift2_v),    .ready_out(drift_r_in),
-        .a(in_buf.r - half_sigma2), .b(in_buf.dt),
-        .result(drift)
+        .valid_in   (drift_v_mid), 
+        .valid_out  (drift_v_out),
+        .ready_in   (join_ready),
+        .ready_out  (mul_drift_ready), 
+        .a          (in_buf.r - half_sigma2), 
+        .b          (in_buf.dt),
+        .result     (drift)
     );
 
     // ----------------------------------------------------------------------
     // 2. DIFFUSION branch : σ √dt · z
     // ----------------------------------------------------------------------
     logic diff_v_in = buf_valid;
-    logic diff_r_in, diff_v_out, mul_reg;
+    logic diff_v_mid1, diff_v_mid2, diff_v_out;
     logic signed [WIDTH-1:0] sqrt_dt, sigma_sqrt_dt, diffusion;
 
     fxSqrt #() sqrt_blk (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (diff_v_in),  .ready_in(diff_r_in),
-        .valid_out(diff_v_out), .ready_out(drift2_r),
-        .y(in_buf.dt),
-        .sqrt_out(sqrt_dt)
+        .valid_in   (diff_v_in),  
+        .valid_out  (diff_v_mid1), 
+        .ready_in   (mul_sigma_sqrt_ready),
+        .ready_out  (sqrt_blk_ready),
+        .a          (in_buf.dt),
+        .result   (sqrt_dt)
     );
 
     logic diff2_v, diff2_r;
     fxMul #(.LATENCY(2)) mul_sigma_sqrt (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (diff_v_out), .ready_in(diff2_r),
-        .valid_out(diff2_v),    .ready_out(diff_r_in),
-        .a(sqrt_dt), .b(in_buf.sigma),
-        .result(sigma_sqrt_dt)
+        .valid_in   (diff_v_mid1), 
+        .valid_out  (diff_v_mid2),    
+        .ready_in   (mul_diffusion_ready),
+        .ready_out  (mul_sigma_sqrt_ready),
+        .a          (sqrt_dt), 
+        .b          (in_buf.sigma),
+        .result     (sigma_sqrt_dt)
     );
 
     fxMul #(.LATENCY(2)) mul_diffusion (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (diff2_v), .ready_in(mul_reg),
-        .valid_out(diffusion_v), .ready_out(diff2_r),
-        .a(sigma_sqrt_dt), .b(in_buf.z),
-        .result(diffusion)
+        .valid_in   (diff_v_mid2), 
+        .valid_out  (diff_v_out), 
+        .ready_in   (join_ready),
+        .ready_out  (mul_diffusion_ready),
+        .a          (sigma_sqrt_dt), 
+        .b          (in_buf.z),
+        .result     (diffusion)
     );
 
     // ----------------------------------------------------------------------
     // 3. Join drift + diffusion  (requires both branches ready)
     // ----------------------------------------------------------------------
-    logic join_valid = drift2_v & diffusion_v;
-    logic join_ready = pipe_ready;             // back-pressure from stage 4
-
-    // No additional buffering: both sub-branches stay asserted until accepted
-    assign drift2_r     = join_ready & diffusion_v;
-    assign diff2_r      = join_ready & drift2_v;
-    assign drift_r_in   = 1'b1;                // early stages never stall
-    assign diff_r_in    = 1'b1;
+    (* preserve = 1 *) logic join_valid = drift_v_out && diff_v_out; //preservatin for retiming
+    logic join_ready;
+    assign join_ready = drift_barrier && diffusion_barrier && mul_price_ready; //barrier ready
 
     logic signed [WIDTH-1:0] exp_arg;
-    always_ff @(posedge clk) begin
+    always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             exp_arg <= '0;
-        else if (join_valid & join_ready)
-            exp_arg <= drift + diffusion;
+        else if (join_valid && join_ready)
+            exp_arg <= (drift + diffusion > (1 <<< (WIDTH-1)-1)) ? (1 <<< (WIDTH-1)-1) : drift + diffusion;
+            //basically just a catch but it means 
+            //exp_arg <= drift + diffusion;
     end
 
     // ----------------------------------------------------------------------
@@ -146,37 +157,54 @@ module GBM_step #(
     assign sign_bit = exp_arg[WIDTH-1];
     assign abs_arg  = sign_bit ? -exp_arg : exp_arg;
 
-    logic exp_v, exp_reg, recip_v;
+    logic exp_v, recip_v;
     logic signed [WIDTH-1:0] e_pos, e_neg;
 
     fxExpLUT #() explut (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (join_valid), .ready_in(exp_reg),
-        .valid_out(exp_v),      .ready_out(mul_reg),
-        .a(abs_arg),
-        .result(e_pos)
+        .valid_in   (join_valid), 
+        .valid_out  (exp_v),      
+        .ready_in   (recip_ready),
+        .ready_out  (explut_ready),
+        .a          (abs_arg),
+        .result     (e_pos)
     );
 
     fxDiv #() recip (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (exp_v),   .ready_in(1'b1),
-        .valid_out(recip_v), .ready_out(exp_reg),
-        .numerator({1'b0, {QFRAC{1'b1}}}),  // 1.0 in Q format
-        .denominator(e_pos),
-        .result(e_neg)
+        .valid_in       (exp_v),   
+        .valid_out      (recip_v), 
+        .ready_in       (mul_price_ready),
+        .ready_out      (recip_ready),
+        .numerator      (ONE),  // 1.0 in Q format
+        .denominator    (e_pos),
+        .result         (e_neg)
     );
 
-    wire signed [WIDTH-1:0] e_final = sign_bit ? e_neg : e_pos;
+    logic signed [WIDTH-1:0] e_final = sign_bit ? e_neg : e_pos;
 
     // ----------------------------------------------------------------------
     // 5.  Final price  S_next = S · e^(drift+diff)
     // ----------------------------------------------------------------------
     fxMul #(.LATENCY(2)) mul_price (
         .clk(clk), .rst_n(rst_n),
-        .valid_in (recip_v),  .ready_in(ready_in),
-        .valid_out(valid_out), .ready_out(/*unused*/),
-        .a(e_final), .b(in_buf.S),
-        .result(S_next)
+        .valid_in   (recip_v),  
+        .valid_out  (valid_out), 
+        .ready_in   (ready_in),
+        .ready_out  (mul_price_ready),
+        .a          (e_final), 
+        .b          (in_buf.S),
+        .result     (S_next)
     );
+    initial begin
+        assert property (@(posedge clk) sigma2 >= 0) 
+            else $error("Negative sigma2 in GBM");
 
+        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next)) 
+            else $error("GBM: Backpressure violation");
+        
+        assert property (@(posedge clk) disable iff (!rst_n) (drift_v_out != diff_v_out) |-> ##1 !join_valid) 
+            else $error("GBM: Lagging branch");
+        
+    end
 endmodule

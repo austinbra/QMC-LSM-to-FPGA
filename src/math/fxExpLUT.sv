@@ -52,7 +52,7 @@ module fxExpLUT #(
         if (!rst_n)
             result_reg <= '0;
         else if (valid_in && ready_out)
-            result_reg <= is_neg ? ((1 <<< QFRAC) / lut[lut_index]) : lut[lut_index];
+            result_reg <= is_neg ? ((1 << QFRAC) / lut[lut_index]) : lut[lut_index];
     end
 
     // Output handshake

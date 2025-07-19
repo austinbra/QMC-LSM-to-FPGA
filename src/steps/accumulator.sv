@@ -3,7 +3,8 @@ module accumulator #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT      = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC     = fpga_cfg_pkg::FP_QFRAC,
-    parameter int N_SAMPLES = 10000
+    parameter int N_SAMPLES = 10000,
+    parameter int LANE_ID = 0
 )(
     input  logic                     clk,
     input  logic                     rst_n,
@@ -22,66 +23,95 @@ module accumulator #(
 
 
 );
-    logic shift_en;
+    //dumb skid buffer
+    typedef struct packed {
+        logic signed [WIDTH-1:0] x_in;
+        logic signed [WIDTH-1:0] y_in;
+    } input_t;
 
+    input_t in_buf;
+    logic buf_valid;
+    logic shift_en = ready_in && buf_valid;  // Standard clear trigger
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            buf_valid <= 0;
+            in_buf <= '{0, 0};  // Explicit reset
+        end else begin
+            if (valid_in && ready_out) begin
+                in_buf <= '{x_in, y_in};
+                buf_valid <= 1;
+            end else if (shift_en) begin
+                buf_valid <= 0;
+            end
+        end
+    end
+
+    //stuff
     logic v_x2, v_acc;
     logic signed [WIDTH-1:0] x2, xy, x2y, x3, x4;
 
     logic mul_x_x_ready, mul_x_y_ready, mul_x2_y_ready, mul_x2_x_ready, mul_x2_x2_ready;
+    logic solver_ready,div_mean_ready;
 
-    wire barrier_ready = mul_x_x_ready && mul_x_y_ready && mul_x2_y_ready && mul_x2_x_ready && mul_x2_x2_ready;
+
+    logic parallel_barrier;
+    assign parallel_barrier = mul_x_x_ready && mul_x_y_ready;
+    logic accum_barrier_ready;
+    assign accum_barrier_ready = mul_x2_y_ready && mul_x2_x_ready && mul_x2_x2_ready;
+
     
-    assign ready_out = (shift_en && barrier_ready) && (state == IDLE);
-    assign shift_en = ready_in || !valid_out && barrier_ready;
-
-    fxMul_always #() mul_x_x (
+    
+    assign ready_out = (!buf_valid || (parallel_barrier && accum_barrier_ready && solver_ready && (state == IDLE)));
+    
+    fxMul #() mul_x_x (
         .clk (clk), .rst_n (rst_n),
         .valid_in  (valid_in),
         .valid_out (v_x2),
         .ready_in  (ready_in && (state == IDLE)),
         .ready_out (mul_x_x_ready),
-        .a         (x_in),
-        .b         (x_in),
+        .a         (in_buf.x_in),
+        .b         (in_buf.x_in),
         .result    (x2)
     );
 
-    fxMul_always #() mul_x_y (
+    fxMul #() mul_x_y (
         .clk(clk), .rst_n(rst_n), 
         .valid_in   (valid_in), 
         .valid_out  (/*unused*/),
         .ready_in   (ready_in && (state == IDLE)),
         .ready_out  (mul_x_y_ready),
-        .a          (x_in), 
-        .b          (y_in), 
+        .a          (in_buf.x_in), 
+        .b          (in_buf.y_in), 
         .result     (xy)
     );
 
 
 
-    fxMul_always #() mul_x2_y (
+    fxMul #() mul_x2_y (
         .clk(clk), .rst_n(rst_n), 
         .valid_in   (v_x2), 
         .valid_out  (v_acc),
         .ready_in   (mul_x_x_ready && ready_in && (state == IDLE)),
         .ready_out  (mul_x2_y_ready),
         .a          (x2), 
-        .b          (y_in), 
+        .b          (in_buf.y_in), 
         .result     (x2y)
     );
 
     // extra mults fed by x2 so they line-up with v_acc
-    fxMul_always #() mul_x2_x (
+    fxMul #() mul_x2_x (
         .clk(clk), .rst_n(rst_n), 
         .valid_in   (v_x2), 
         .valid_out  (/*unused*/),
         .ready_in   (mul_x_x_ready && ready_in && (state == IDLE)), 
         .ready_out  (mul_x2_x_ready),
         .a          (x2), 
-        .b          (x_in), 
+        .b          (in_buf.x_in), 
         .result     (x3)
     );
 
-    fxMul_always #() mul_x2_x2 (
+    fxMul #() mul_x2_x2 (
         .clk(clk), .rst_n(rst_n), 
         .valid_in   (v_x2), 
         .valid_out  (/*unused*/),
@@ -115,14 +145,13 @@ module accumulator #(
             sumxy   <= '0; 
             sumx2y  <= '0; 
             count   <= '0;
-        end
-        else if (v_acc && shift_en && barrier_ready) begin
+        end else if (v_acc && parallel_barrier && accum_barrier_ready && shift_en) begin
             sum1    <= sum1     + 1;
-            sumx    <= sumx     + extended(x_in);
+            sumx    <= sumx     + extended(in_buf.x_in);
             sumx2   <= sumx2    + extended(x2);
             sumx3   <= sumx3    + extended(x3);
             sumx4   <= sumx4    + extended(x4);
-            sumy    <= sumy     + extended(y_in);
+            sumy    <= sumy     + extended(in_buf.y_in);
             sumxy   <= sumxy    + extended(xy);
             sumx2y  <= sumx2y   + extended(x2y);
             count   <= count    + 1;
@@ -138,7 +167,6 @@ module accumulator #(
     logic signed [WIDTH-1:0] mat_flat [0:11];
     logic signed [WIDTH-1:0] beta_s [0:2];
     logic singular_err;
-    logic solver_ready;
 
     regression solver (
         .clk(clk), 
@@ -155,11 +183,10 @@ module accumulator #(
     logic fallback_trigger;
     logic signed [WIDTH-1:0] mean_payoff;
     logic mean_done;
-    logic div_mean_ready;
 
     fxDiv #() div_mean (
         .clk(clk), .rst_n(rst_n), 
-        .valid_in   (fallback_trigger && barrier_ready),  // Gate with barrier for sync
+        .valid_in   (fallback_trigger),
         .numerator  (sumy <<< QFRAC), 
         .denominator(sum1[WIDTH-1:0]),
         .result     (mean_payoff), 
@@ -168,47 +195,58 @@ module accumulator #(
         .ready_out  (div_mean_ready)  // Chain ready
     );
 
+    function logic signed [WIDTH-1:0] saturate(acc_t val);
+        automatic logic signed [WIDTH-1:0] max_pos = (1 <<< (WIDTH-1)) - 1;
+        automatic logic signed [WIDTH-1:0] max_neg = -(1 <<< (WIDTH-1));
+        if (val > max_pos) 
+            saturate = max_pos;
+        else if (val < max_neg) 
+            saturate = max_neg;
+        else 
+            saturate = val[WIDTH-1:0];
+    endfunction
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n || singular_err) begin
             state <= IDLE;
-            start_solver <= 0;
-            valid_out <= 0;
-            fallback_trigger <= 0;
+            start_solver <= '0;
+            valid_out <= '0;
+            fallback_trigger <= '0;
         end else case (state)
             IDLE:
-                if (count == N_SAMPLES && barrier_ready) begin  // ts took me so long, so confusing
+                if (count == N_SAMPLES && ready_out) begin  // ts took me so long, so confusing
                     // Row 0 (signed saturation to prevent overflow)
-                    mat_flat[0] = (sum1 > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sum1 < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sum1[WIDTH-1:0];
-                    mat_flat[1] = (sumx > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx[WIDTH-1:0];
-                    mat_flat[2] = (sumx2 > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx2 < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx2[WIDTH-1:0];
-                    mat_flat[3] = (sumy > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumy < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumy[WIDTH-1:0];
+                    mat_flat[0] = saturate(sum1);
+                    mat_flat[1] = saturate(sumx);
+                    mat_flat[2] = saturate(sumx2)
+                    mat_flat[3] = saturate(sumy)
                     // Row 1
-                    mat_flat[4] = (sumx > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx[WIDTH-1:0];
-                    mat_flat[5] = (sumx2 > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx2 < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx2[WIDTH-1:0];
-                    mat_flat[6] = (sumx3 > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx3 < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx3[WIDTH-1:0];
-                    mat_flat[7] = (sumxy > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumxy < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumxy[WIDTH-1:0];
+                    mat_flat[4] = saturate(sumx)
+                    mat_flat[5] = saturate(sumx2)
+                    mat_flat[6] = saturate(sumx3)
+                    mat_flat[7] = saturate(sumxy)
                     // Row 2
-                    mat_flat[8] = (sumx2 > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx2 < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx2[WIDTH-1:0];
-                    mat_flat[9] = (sumx3 > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx3 < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx3[WIDTH-1:0];
-                    mat_flat[10] = (sumx4 > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx4 < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx4[WIDTH-1:0];
-                    mat_flat[11] = (sumx2y > (1 <<< (WIDTH-1)-1)) ? ((1 <<< (WIDTH-1))-1) : (sumx2y < -(1 <<< (WIDTH-1))) ? -(1 <<< (WIDTH-1)) : sumx2y[WIDTH-1:0];
+                    mat_flat[8] = saturate(sumx2)
+                    mat_flat[9] = saturate(sumx3)
+                    mat_flat[10] = saturate(sumx4 )
+                    mat_flat[11] = saturate(sumx2y)
                     start_solver <= 1;
                     state <= SOLVE;
                 end
             SOLVE:
-                if (ready_in) begin
+                if (solver_ready) begin
                     start_solver <= '0;
                     state <= WAIT;
                   end
             WAIT: 
-                if (solver_done) begin
+                if (solver_done && ready_in) begin
                     logic fallback = singular_err;
 
                     // fallback: beta[0] = mean payoff; beta[1] = beta[2] = 0
                     if (fallback) begin
                         fallback_trigger <= 1;
                         if (mean_done && ready_in) begin
-                            fallback_trigger <= 0;
+                            fallback_trigger <= '0;
                             beta[0] <= mean_payoff;
                             beta[1] <= '0;
                             beta[2] <= '0;
@@ -236,7 +274,7 @@ module accumulator #(
     end
 
     initial begin
-        assert property (@(posedge clk) disable iff (!rst_n) v_acc && barrier_ready |-> $stable(x2) && $stable(xy) && $stable(x2y) && $stable(x3) && $stable(x4)) 
+        assert property (@(posedge clk) disable iff (!rst_n) v_acc && accum_barrier_ready |-> $stable(x2) && $stable(xy) && $stable(x2y) && $stable(x3) && $stable(x4)) 
             else $error("Mul desync on stall"); //sync
 
         assert property (@(posedge clk) disable iff (!rst_n) !ready_out |-> !valid_out) //handsjake invar
@@ -244,5 +282,11 @@ module accumulator #(
 
         assert property (@(posedge clk) disable iff (!rst_n) singular_err |=> singular_err) //singluar stickiness
             else $error("singular_err not sticky");
+        
+	    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta)) 
+            else $error("Accumulator: Output stall overwrite");
+
+        assert property (@(posedge clk) disable iff (!rst_n) v_x2 |-> v_x2) 
+            else $error("Desync in initial muls");
     end
 endmodule

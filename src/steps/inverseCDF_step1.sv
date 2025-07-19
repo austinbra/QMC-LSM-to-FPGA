@@ -8,14 +8,13 @@ module inverseCDF_step1 #(
     input logic rst_n,
 
     input logic valid_in,
-    input  logic ready_in,//downstream ready
-
-    input logic signed [WIDTH-1:0] u,   // sobol number in Q16.16
-
+    input  logic ready_in,
     output logic valid_out,
-    output logic ready_out,//upstream ready
+    output logic ready_out,
 
-    output logic [WIDTH-1:0] x,         // Q16.16 value in (0, 0.5]
+    input logic signed [WIDTH-1:0] u,
+
+    output logic [WIDTH-1:0] x,         // (0, 0.5]
     output logic negate                 // If 1, final z-score should be negated
 );
 
@@ -23,10 +22,12 @@ module inverseCDF_step1 #(
 
     logic [WIDTH-1:0] x_reg;
     logic negate_reg, valid_reg;
+    logic shift_en;
+    assign shift_en = ready_in && valid_reg;
 
-    always_ff @(posedge clk) begin
+    always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            x <= '0;
+            x_reg <= '0;
             negate_reg <= '0;
             valid_reg <= '0;
         end else begin
@@ -35,11 +36,11 @@ module inverseCDF_step1 #(
                     x_reg <= u;
                     negate_reg <= 1'b0;
                 end else begin
-                    x_reg <= (1'sd1 << QFRAC) - u;
+                    x_reg <= (1 <<< QFRAC) - u;
                     negate_reg <= 1'b1;
                 end
                 valid_reg <= 1'b1;
-            end else if (ready_in && valid_reg) begin
+            end else if (shift_en) begin
                 valid_reg <= '0;
             end
         end
@@ -48,6 +49,11 @@ module inverseCDF_step1 #(
     assign x            = x_reg;
     assign negate       = negate_reg;
     assign valid_out    = valid_reg;
-    assign ready_out    = ~valid_reg;
+    assign ready_out    = !valid_reg || ready_in;
+
+    initial begin
+	assert property (@(posedge clk) disable iff (!rst_n) valid_in && !ready_out |=> $stable(u)) 
+        else $error("Step1: Input overwrite");
+    end
 
 endmodule
