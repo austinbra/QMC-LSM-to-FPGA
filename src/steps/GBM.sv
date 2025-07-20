@@ -1,4 +1,4 @@
-module GBM_step #(
+module GBM #(
     parameter int WIDTH       = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT        = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC       = fpga_cfg_pkg::FP_QFRAC,
