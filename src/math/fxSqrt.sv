@@ -26,11 +26,12 @@ module fxSqrt #(
     output logic [WIDTH-1:0] result
 );
 
-    logic accept = valid_in && ready_out;
+    logic accept;
+    assign accept = valid_in && ready_out;
     logic v0, v1, v2, v3, v4;
 
     localparam signed [WIDTH-1:0] ONE_POINT_FIVE = (3 << (QFRAC-1));  // 1.5
-    localparam signed [WIDTH-1:0] HALF    = 1 << (QFRAC-1);     // 0.5
+    localparam signed [WIDTH-1:0] HALF           = 1 << (QFRAC-1);     // 0.5
 
     //--------------------------------------------------------------------------
     // normalisation (combinational, tiny)
@@ -58,7 +59,8 @@ module fxSqrt #(
     // Stage 0:  LUT for r0  ( 1/sqrt(a))
     // -------------------------------------------------------------------------
 
-    logic [LUT_BITS-1:0] lut_index = a_norm_reg[QFRAC + LUT_BITS - 1 : QFRAC];
+    logic [LUT_BITS-1:0] lut_index;
+    assign lut_index = a_norm_reg[QFRAC + LUT_BITS - 1 : QFRAC];
 
     (* rom_style="block" *)
     logic signed [WIDTH-1:0] sqrt_lut [0:(1<<LUT_BITS)-1];
@@ -210,6 +212,10 @@ module fxSqrt #(
 
     assign valid_out = v4;
     assign result = v4_result;
+
+    initial begin
+        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result));
+    end
 
 
 endmodule

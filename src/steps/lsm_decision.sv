@@ -30,7 +30,8 @@ module lsm_decision #( //sequential
 
     input_t in_buf;
     logic buf_valid;
-    logic shift_en = ready_in && buf_valid;
+    logic shift_en;
+    assign shift_en = ready_in && buf_valid;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -47,7 +48,9 @@ module lsm_decision #( //sequential
     end
 
     logic mul_S_S_ready, mul_b1S_ready, mul_b2S2_ready;
-    logic barrier_ready = mul_S_S_ready && mul_b1S_ready && mul_b2S2_ready;
+    logic barrier_ready;
+    
+    assign barrier_ready = mul_S_S_ready && mul_b1S_ready && mul_b2S2_ready;
     assign ready_out = (!buf_valid || (barrier_ready && ready_in));
     // continuation value
     //------------------------------------- 

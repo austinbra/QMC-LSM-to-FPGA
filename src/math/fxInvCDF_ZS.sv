@@ -25,7 +25,7 @@ module fxInvCDF_ZS #(
 
     // pre determined constants 
     // C0 ≈ 2.515517 = 2 + (0.515517 * 2^QFRAC)
-    localparam signed [WIDTH-1:0] C0 = (2 <<< QFRAC) + ((515517 * (1 <<< QFRAC)) / 1000000);
+    localparam signed [WIDTH-1:0] C0 = (2 <<< QFRAC) + ((515517 <<< (QFRAC - 20)) / 1000000);
     localparam signed [WIDTH-1:0] C1 = (802853 * (1 <<< QFRAC)) / 1000000; // C1 ≈ 0.802853 = 0 + (0.802853 * 2^QFRAC)
     localparam signed [WIDTH-1:0] C2 = (10328 * (1 <<< QFRAC)) / 1000000; // C2 ≈ 0.010328 = 0 + (0.010328 * 2^QFRAC)
 
@@ -37,14 +37,17 @@ module fxInvCDF_ZS #(
 
 
     logic [WIDTH-1:0] mul_t3_ready, mul_t2_ready, mul_c1t_ready, mul_c2t2_ready, mul_d1t_ready, mul_d2t2_ready, mul_d3t3_ready, div_nd_ready;
-    wire barrier_ready = mul_t2_ready && mul_c1t_ready && mul_c2t2_ready && mul_d1t_ready && mul_d2t2_ready && mul_d3t3_ready && div_nd_ready;
-    assign ready_out = barrier_ready && (ready_in || !skid_valid); 
+    logic barrier_ready;
+
+    assign barrier_ready = mul_t2_ready && mul_c1t_ready && mul_c2t2_ready && mul_d1t_ready && mul_d2t2_ready && mul_d3t3_ready && div_nd_ready;
+    assign ready_out = !skid_valid || (barrier_ready && ready_in);
     
 //skid buffer
     logic v0;
     logic skid_valid, skid_negate;
     logic [WIDTH-1:0] skid_t;
-    wire accept = valid_in && ready_out && !skid_valid;
+    logic accept;
+    assign accept  = valid_in && ready_out && !skid_valid;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -56,9 +59,11 @@ module fxInvCDF_ZS #(
         end else if (ready_in && skid_valid) 
             skid_valid <= '0;  // Drain on ready
     end
-    logic [WIDTH-1:0] t_eff = skid_valid ? skid_t : t;
-    logic negate_eff = skid_valid ? skid_negate : negate;
+    logic [WIDTH-1:0] t_eff;
+    logic negate_eff;
 
+    assign t_eff = skid_valid ? skid_t : t;
+    assign negate_eff = skid_valid ? skid_negate : negate;
     assign v0 = (skid_valid || valid_in) && barrier_ready;
 
 // Multipliers

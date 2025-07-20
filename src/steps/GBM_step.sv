@@ -3,7 +3,7 @@ module GBM_step #(
     parameter int QINT        = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC       = fpga_cfg_pkg::FP_QFRAC,
     parameter int DIV_LATENCY = fpga_cfg_pkg::FP_DIV_LATENCY,
-    parameter int LANE_ID = 0
+    parameter int LANE_ID     = 0
 )(
     input  logic                       clk,
     input  logic                       rst_n,
@@ -35,7 +35,7 @@ module GBM_step #(
 
     sample_t in_buf;
     logic buf_valid;
-    logic shift_en = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
+    
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -52,15 +52,24 @@ module GBM_step #(
     end
 
     logic mul_sigma2_ready, mul_drift_ready, sqrt_blk_ready, mul_sigma_sqrt_ready, mul_diffusion_ready, explut_ready, recip_ready, mul_price_ready;
-    logic drift_barrier = mul_sigma2_ready && mul_drift_ready;
-    logic diffusion_barrier = sqrt_blk_ready && mul_sigma_sqrt_ready && mul_diffusion_ready;
-    logic exp_barrier = explut_ready && recip_ready;
+    logic drift_barrier;
+    logic diffusion_barrier;
+    logic exp_barrier;
+    logic shift_en;
 
+
+    assign drift_barrier = mul_sigma2_ready && mul_drift_ready;
+    assign diffusion_barrier = sqrt_blk_ready && mul_sigma_sqrt_ready && mul_diffusion_ready;
+    assign exp_barrier = explut_ready && recip_ready;
     assign ready_out = (!buf_valid || (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready));
+    assign shift_en = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
+    
     // ----------------------------------------------------------------------
     // 1. DRIFT branch :  (r – 0.5 σ²) * dt
     // ----------------------------------------------------------------------
-    logic drift_v_in = buf_valid && shift_en;
+    logic drift_v_in;
+    assign drift_v_in = buf_valid && shift_en;
+
     logic drift_v_mid, drift_v_out;
     logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
     
@@ -94,7 +103,9 @@ module GBM_step #(
     // ----------------------------------------------------------------------
     // 2. DIFFUSION branch : σ √dt · z
     // ----------------------------------------------------------------------
-    logic diff_v_in = buf_valid;
+    logic diff_v_in;
+    assign diff_v_in = buf_valid;
+
     logic diff_v_mid1, diff_v_mid2, diff_v_out;
     logic signed [WIDTH-1:0] sqrt_dt, sigma_sqrt_dt, diffusion;
 
@@ -134,7 +145,9 @@ module GBM_step #(
     // ----------------------------------------------------------------------
     // 3. Join drift + diffusion  (requires both branches ready)
     // ----------------------------------------------------------------------
-    (* preserve = 1 *) logic join_valid = drift_v_out && diff_v_out; //preservatin for retiming
+    (* preserve = 1 *) logic join_valid; //preservatin for retiming
+    assign join_valid = drift_v_out && diff_v_out;
+
     logic join_ready;
     assign join_ready = drift_barrier && diffusion_barrier && mul_price_ready; //barrier ready
 
@@ -181,7 +194,8 @@ module GBM_step #(
         .result         (e_neg)
     );
 
-    logic signed [WIDTH-1:0] e_final = sign_bit ? e_neg : e_pos;
+    logic signed [WIDTH-1:0] e_final;
+    assign e_final = sign_bit ? e_neg : e_pos;
 
     // ----------------------------------------------------------------------
     // 5.  Final price  S_next = S · e^(drift+diff)

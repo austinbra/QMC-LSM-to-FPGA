@@ -1,7 +1,8 @@
 
 module sobol_flex #(
-    parameter int WIDTH = fpga_cfg_pkg::FP_WIDTH,   // 16, 32, 64...
-    parameter int M = 50                       // time-steps "dimensions"
+    parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,   // 16, 32, 64...
+    parameter int M         = 50,                       // time-steps "dimensions"
+    parameter int LANE_ID   = 0
 )(
     input  logic                         clk,
     input  logic                         rst_n,
@@ -24,7 +25,7 @@ module sobol_flex #(
 
     logic [WIDTH-1:0] gray;
     always_comb begin
-        gray = idx_in ^ (idx_in >> 1); 
+        gray = idx_in ^ (idx_in >>> 1); 
     end
     //one on/off shifts the new dot into the biggest available gap.
     //Because the recipe is deterministic, the generator never stores the earlier points.
@@ -32,56 +33,69 @@ module sobol_flex #(
 
 
     logic [WIDTH-1:0] leaf [0:WIDTH-1];
-    genvar k;
+    
     generate
-        for (k = 0; k < WIDTH; k = k + 1)
+        for (genvar k = 0; k < WIDTH; k = k + 1) begin
             assign leaf[k] = gray[k] ? direction[dim_in*WIDTH + k] : '0; //for each bit position check if high then save x and y value, else 0
+        end
     endgenerate
 
     // depth = ceil(log2(WIDTH))
-    localparam int LEVELS = (WIDTH <= 1) ? 1 : $clog2(WIDTH);
+    localparam int LEVELS = $clog2(WIDTH);
 
     // Stages; example: stage[l][i] holds XOR result at level l, element i
     logic [WIDTH-1:0] stage [0:LEVELS][0:WIDTH-1];
     generate
-        for (k = 0; k < WIDTH; k++)
+        for (k = 0; k < WIDTH; k++)begin
             assign stage[0][k] = leaf[k];
-
+        end
+        
         //xor everything together
-        for (k = 0; k < LEVELS; k++) begin : GEN_LEVEL
-            for (int j = 0; j < (WIDTH >> (k+1)); j++) begin : GEN_PAIR
-                assign stage[k+1][j] = stage[k][2*j] ^ stage[k][2*j+1];
+        for (genvar lvl = 0; lvl < LEVELS; lvl++) begin : GEN_LEVEL
+            for (genvar j = 0; j < (WIDTH >>> (lvl+1)); j++) begin : GEN_PAIR
+                assign stage[lvl+1][j] = stage[lvl][2*j] ^ stage[lvl][2*j+1];
             end
         end
     endgenerate
     
-    wire [WIDTH-1:0] sobol_raw = stage[LEVELS][0];
+    logic [WIDTH-1:0] sobol_raw;
+    assign sobol_raw = stage[LEVELS][0];
 
-    // ---------------------------------------------------------------------
-    //one deep skid buffer for ready/valid
-    // ---------------------------------------------------------------------
-    logic             valid_reg;
-    logic [WIDTH-1:0] sobol_reg;
 
-    assign ready_out = ~valid_reg;     // space available when buffer empty
-    assign valid_out =  valid_reg;
-    assign sobol_out =  sobol_reg;
+    // skid buffer for ready/valid handshaking
+    logic skid_valid;
+    logic [WIDTH-1:0] skid_sobol_reg;
+
+    assign ready_out = !skid_valid || ready_in;
+
+    assign valid_out = skid_valid;
+    assign sobol_out = skid_sobol_reg;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            valid_reg <= 1'b0;
-        end
-        else begin
-            // load new sample when upstream valid and buffer empty
+            skid_valid <= 1'b0;
+            skid_sobol_reg <= '0;
+        end else begin
             if (valid_in && ready_out) begin
-                sobol_reg <= sobol_raw;
-                valid_reg <= 1'b1;
+                skid_sobol_reg <= sobol_raw;
+                skid_valid <= 1'b1;
             end
-            // release buffer after downstream consumes
-            else if (valid_reg && ready_in) begin
-                valid_reg <= 1'b0;
+            else if (skid_valid && ready_in) begin
+                skid_valid <= 1'b0;
             end
         end
+    end
+
+    // Assertions for verification (stall/backpressure invariants)
+    initial begin
+        assert (WIDTH > 0 && $clog2(WIDTH) == LEVELS) 
+            else $error("Non-power-of-2 WIDTH in Sobol");
+
+        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(sobol_out)) 
+            else $error("Sobol: Stall overwrite - data loss");
+
+        assert property (@(posedge clk) disable iff (!rst_n) valid_in && !ready_out |=> $stable(idx_in) && $stable(dim_in)) 
+            else $error("Sobol: Input overwrite on backpressure");
     end
 
 endmodule

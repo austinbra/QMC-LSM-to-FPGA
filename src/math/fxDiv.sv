@@ -20,29 +20,30 @@ module fxDiv #(
 );
 
 //skid buffer
-    logic skid_valid;
+    logic buf_valid;
     logic signed [WIDTH-1:0] skid_num_reg;
     logic signed [WIDTH-1:0] skid_den_reg;
 
-    wire accept_to_skid = valid_in && ready_out && !skid_valid;
+    logic accept_to_skid;
+    assign accept_to_skid = valid_in && ready_out && !buf_valid;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            skid_valid <= 1'b0;
+            buf_valid <= '0;
             skid_num_reg <= '0;
             skid_den_reg <= '0;
         end else if (accept_to_skid) begin
             skid_num_reg <= numerator;
             skid_den_reg <= denominator == 0 ? (1 <<< QFRAC) : denominator;
-            skid_valid <= 1'b1;
-        end else if (ready_in && skid_valid) begin
-            skid_valid <= 1'b0;
+            buf_valid <= 1'b1;
+        end else if (ready_in && buf_valid) begin
+            buf_valid <= '0;
         end
     end
 //valid signal pipeline
     logic [LATENCY-1:0] valid_pipe;
-    wire  shift_en = ready_in | ~valid_pipe[LATENCY-1];
-    assign ready_out = ~valid_pipe[0] | shift_en;
+    
+    assign ready_out = !valid_pipe[0] || shift_en;
 
 // Input staging
     logic signed [WIDTH-1:0] num_reg, den_reg;
@@ -68,10 +69,11 @@ module fxDiv #(
     logic core_nd, core_rfd, core_ready;
     logic signed [WIDTH-1:0] core_result;
 
-    assign core_nd  = valid_in && ready_out; // new data
+    assign core_nd  = (buf_valid || valid_in) && ready_out;; // new data
     assign core_rfd = ready_out; // core ready for data
-    
-    wire shift_en = ready_in | ~valid_pipe[LATENCY-1] | core_ready;
+
+    logic shift_en;
+    assign shift_en = ready_in || ~valid_pipe[LATENCY-1] || core_ready;
 
     fxDiv_core div_u (
         .aclk   (clk),
@@ -100,6 +102,9 @@ module fxDiv #(
 
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result)) 
             else $error("fxDiv: Backpressure violation - result overwritten");
+        
+        assert property (@(posedge clk) disable iff (!rst_n) buf_valid && !ready_in |=> $stable(skid_num_reg)) 
+            else $error("fxDiv skid stall overwrite");
     end
 
 endmodule

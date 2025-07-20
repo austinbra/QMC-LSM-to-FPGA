@@ -1,8 +1,8 @@
 module fxlnLUT #(
-    parameter WIDTH = fpga_cfg_pkg::FP_WIDTH,
-    parameter QINT = fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC,
-    parameter LUT_BITS = 12 
+    parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT      = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC     = fpga_cfg_pkg::FP_QFRAC,
+    parameter int LUT_BITS  = 12 
 )(
     input logic clk,
     input logic rst_n,
@@ -18,7 +18,7 @@ module fxlnLUT #(
     
     //skid buffer
     logic v_reg;
-    assign ready_out = ~v_reg | ready_in;
+    assign ready_out = !v_reg || ready_in;
 
     //range 2^‑LUT_BITS to 2
     localparam [WIDTH-1:0] A_MIN = 1 << (QFRAC-LUT_BITS);
@@ -39,13 +39,14 @@ module fxlnLUT #(
     end
 
     // BRAM lookup
-    wire [LUT_BITS-1:0] lut_index = a_bound[QFRAC-1 -: LUT_BITS];
+    logic [LUT_BITS-1:0] lut_index;
+    assign lut_index = a_bound[QFRAC-1 -: LUT_BITS];
 
     (* rom_style="block" *)
     logic [WIDTH-1:0] lut [0:(1<<LUT_BITS)-1];
     initial $readmemh("../gen/ln_lut_4096.hex", lut);
 
-    logic signed [WIDTH-1:0] result_reg;
+    logic [WIDTH-1:0] result_reg;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) 
             result_reg <= '0;
@@ -54,7 +55,8 @@ module fxlnLUT #(
     end
 
     // Handshake
-    wire shift_en = ready_in | ~v_reg;
+    logic shift_en;
+    assign shift_en = ready_in || !v_reg;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) 
             v_reg <= '0;
@@ -65,4 +67,9 @@ module fxlnLUT #(
     assign valid_out = v_reg;
     assign result = result_reg;
 
+
+    initial begin
+        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result)) 
+            else $error("LnLUT stall overwrite");
+    end
 endmodule

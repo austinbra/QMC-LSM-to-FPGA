@@ -31,7 +31,8 @@ module inverseCDF #(
     //skid buffer
     logic buf_valid;
     logic signed [WIDTH-1:0] buf_u_in;  // Consistent naming
-    logic shift_en = ready_in && buf_valid;
+    logic shift_en;
+    assign shift_en = ready_in && buf_valid;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -49,9 +50,11 @@ module inverseCDF #(
 
 
     logic step1_ready, loglut_ready, mul_neg2_ready, sqrt_unit_ready, rational_ready;
-    logic barrier_ready = step1_ready && loglut_ready && mul_neg2_ready && sqrt_unit_ready && rational_ready;
-    assign ready_out = (!buf_valid || barrier_ready);
+    logic barrier_ready;
     logic internal_ready;
+    
+    assign barrier_ready = step1_ready && loglut_ready && mul_neg2_ready && sqrt_unit_ready && rational_ready;
+    assign ready_out = (!buf_valid || barrier_ready);
     assign internal_ready = barrier_ready && ready_in;
 
 

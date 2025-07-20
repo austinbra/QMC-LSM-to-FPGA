@@ -4,7 +4,7 @@ module accumulator #(
     parameter int QINT      = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC     = fpga_cfg_pkg::FP_QFRAC,
     parameter int N_SAMPLES = 10000,
-    parameter int LANE_ID = 0
+    parameter int LANE_ID   = 0
 )(
     input  logic                     clk,
     input  logic                     rst_n,
@@ -31,7 +31,8 @@ module accumulator #(
 
     input_t in_buf;
     logic buf_valid;
-    logic shift_en = ready_in && buf_valid;  // Standard clear trigger
+    logic shift_en;
+    assign shift_en = ready_in && buf_valid;  // Standard clear trigger
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -42,28 +43,26 @@ module accumulator #(
                 in_buf <= '{x_in, y_in};
                 buf_valid <= 1;
             end else if (shift_en) begin
-                buf_valid <= 0;
+                buf_valid <= '0;
             end
         end
     end
 
     //stuff
-    logic v_x2, v_acc;
-    logic signed [WIDTH-1:0] x2, xy, x2y, x3, x4;
+    
 
     logic mul_x_x_ready, mul_x_y_ready, mul_x2_y_ready, mul_x2_x_ready, mul_x2_x2_ready;
     logic solver_ready,div_mean_ready;
-
-
     logic parallel_barrier;
-    assign parallel_barrier = mul_x_x_ready && mul_x_y_ready;
     logic accum_barrier_ready;
-    assign accum_barrier_ready = mul_x2_y_ready && mul_x2_x_ready && mul_x2_x2_ready;
 
-    
-    
+    assign parallel_barrier = mul_x_x_ready && mul_x_y_ready;
+    assign accum_barrier_ready = mul_x2_y_ready && mul_x2_x_ready && mul_x2_x2_ready;
     assign ready_out = (!buf_valid || (parallel_barrier && accum_barrier_ready && solver_ready && (state == IDLE)));
-    
+
+
+    logic v_x2, v_acc;
+    logic signed [WIDTH-1:0] x2, xy, x2y, x3, x4;
     fxMul #() mul_x_x (
         .clk (clk), .rst_n (rst_n),
         .valid_in  (valid_in),
@@ -187,7 +186,7 @@ module accumulator #(
     fxDiv #() div_mean (
         .clk(clk), .rst_n(rst_n), 
         .valid_in   (fallback_trigger),
-        .numerator  (sumy <<< QFRAC), 
+        .numerator  (sumy << QFRAC), 
         .denominator(sum1[WIDTH-1:0]),
         .result     (mean_payoff), 
         .valid_out  (mean_done),
