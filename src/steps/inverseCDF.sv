@@ -1,4 +1,5 @@
 
+`timescale 1ns/1ps
 module inverseCDF #(
     parameter int WIDTH              = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT               = fpga_cfg_pkg::FP_QINT,
@@ -21,8 +22,8 @@ module inverseCDF #(
 
     localparam signed [WIDTH-1:0] NEG_TWO = -(2 << QFRAC);
 
-    localparam int SQRT_LATENCY         = fpga_cfg_pkg::FP_SQRT_LATENCY
-    localparam int MUL_LATENCY          = fpga_cfg_pkg::FP_MUL_LATENCY
+    localparam int SQRT_LATENCY         = fpga_cfg_pkg::FP_SQRT_LATENCY;
+    localparam int MUL_LATENCY          = fpga_cfg_pkg::FP_MUL_LATENCY;
     localparam int STEP1_LATENCY        = 1;               // inverseCDF_step1: Single register stage
     localparam int LN_LATENCY           = 2;               // fxlnLUT: LUT read + output reg
 
@@ -32,8 +33,17 @@ module inverseCDF #(
     logic buf_valid;
     logic signed [WIDTH-1:0] buf_u_in;  // Consistent naming
     logic shift_en;
-    assign shift_en = ready_in && buf_valid;
 
+    logic step1_ready, loglut_ready, mul_neg2_ready, sqrt_unit_ready, rational_ready;
+    logic barrier_ready;
+    logic internal_ready;
+    
+    assign shift_en = ready_in && buf_valid;
+    assign barrier_ready = step1_ready && loglut_ready && mul_neg2_ready && sqrt_unit_ready && rational_ready;
+    assign ready_out = (!buf_valid || barrier_ready);
+    assign internal_ready = barrier_ready && ready_in;
+    
+    
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             buf_valid <= 0;
@@ -49,13 +59,7 @@ module inverseCDF #(
     end
 
 
-    logic step1_ready, loglut_ready, mul_neg2_ready, sqrt_unit_ready, rational_ready;
-    logic barrier_ready;
-    logic internal_ready;
     
-    assign barrier_ready = step1_ready && loglut_ready && mul_neg2_ready && sqrt_unit_ready && rational_ready;
-    assign ready_out = (!buf_valid || barrier_ready);
-    assign internal_ready = barrier_ready && ready_in;
 
 
 
@@ -87,8 +91,8 @@ module inverseCDF #(
         .valid_out(v2a),
         .ready_in(mul_neg2_ready),
         .ready_out(loglut_ready),   // connect ready from next stage
-        .x(x),
-        .ln_out(ln_x)
+        .a(x),
+        .result(ln_x)
     );
 
     logic [WIDTH-1:0] neg2_ln_x;
@@ -100,10 +104,10 @@ module inverseCDF #(
         .valid_in(v2a),  
         .valid_out(v2b),
         .ready_in(sqrt_unit_ready),
-        .ready_out(mul_neg2_ready)
+        .ready_out(mul_neg2_ready),
         .a(ln_x), 
         .b(NEG_TWO),
-        .result(neg2_ln_x),
+        .result(neg2_ln_x)
         );   
 
     logic [WIDTH-1:0] t;
@@ -117,7 +121,7 @@ module inverseCDF #(
         .ready_in(rational_ready),
         .ready_out(sqrt_unit_ready),
         .a(neg2_ln_x),
-        .sqrt_out(t)
+        .result(t)
     );
 
     // Delay negate signal to align with t 
@@ -153,5 +157,6 @@ module inverseCDF #(
     initial begin   
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z_out)) 
             else $error("InvCDF: Stall overwrite");
+        
     end
 endmodule

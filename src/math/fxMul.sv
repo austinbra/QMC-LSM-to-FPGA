@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 //Streaming / one-per-path work -> fxMul (handshake)
 module fxMul #(
     parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH ,
@@ -72,8 +73,9 @@ module fxMul #(
 
     initial begin
     // Assertions – catch lost back-pressure during sim
-        assert property (@(posedge clk) disable iff(!rst_n) valid_out & ~ready_in |-> ##1 ~ready_out)
+        assert property (@(posedge clk) disable iff(!rst_n) valid_out && !ready_in |-> ##1 ~ready_out)
             else $error("fxMul: back-pressure lost - pipeline overwrite");
+        
     end
 
 endmodule

@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 // Accumulator for quadratic LSM regression (β0 + β1·S + β2·S²)
 module accumulator #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
@@ -9,20 +10,25 @@ module accumulator #(
     input  logic                     clk,
     input  logic                     rst_n,
 
-    input  logic                     valid_in;
-    output logic                     valid_out;
-    input  logic                     ready_in;
-    output logic                     ready_out;
+    input  logic                     valid_in,
+    output logic                     valid_out,
+    input  logic                     ready_in,
+    output logic                     ready_out,
 
     // stream from GBM / decision
     input  logic signed [WIDTH-1:0]  x_in,   // S_t
     input  logic signed [WIDTH-1:0]  y_in,   // discounted payoff
 
     // β’s once per exercise date
-    output logic signed [WIDTH-1:0]  beta [0:2],
+    output logic signed [WIDTH-1:0]  beta [0:2]
 
 
 );
+
+    localparam int IDLE = 0, SOLVE = 1, WAIT = 2;
+    logic [1:0] state;
+    
+    
     //dumb skid buffer
     typedef struct packed {
         logic signed [WIDTH-1:0] x_in;
@@ -160,8 +166,6 @@ module accumulator #(
     // ------------------------------------------------------------
     // 3) do solver when all sums complete
     // ------------------------------------------------------------
-    localparam int IDLE = 0, SOLVE = 1, WAIT = 2;
-    logic [1:0] state;
     logic start_solver, solver_done;
     logic signed [WIDTH-1:0] mat_flat [0:11];
     logic signed [WIDTH-1:0] beta_s [0:2];
@@ -217,18 +221,18 @@ module accumulator #(
                     // Row 0 (signed saturation to prevent overflow)
                     mat_flat[0] = saturate(sum1);
                     mat_flat[1] = saturate(sumx);
-                    mat_flat[2] = saturate(sumx2)
-                    mat_flat[3] = saturate(sumy)
+                    mat_flat[2] = saturate(sumx2);
+                    mat_flat[3] = saturate(sumy);
                     // Row 1
-                    mat_flat[4] = saturate(sumx)
-                    mat_flat[5] = saturate(sumx2)
-                    mat_flat[6] = saturate(sumx3)
-                    mat_flat[7] = saturate(sumxy)
+                    mat_flat[4] = saturate(sumx);
+                    mat_flat[5] = saturate(sumx2);
+                    mat_flat[6] = saturate(sumx3);
+                    mat_flat[7] = saturate(sumxy);
                     // Row 2
-                    mat_flat[8] = saturate(sumx2)
-                    mat_flat[9] = saturate(sumx3)
-                    mat_flat[10] = saturate(sumx4 )
-                    mat_flat[11] = saturate(sumx2y)
+                    mat_flat[8] = saturate(sumx2);
+                    mat_flat[9] = saturate(sumx3);
+                    mat_flat[10] = saturate(sumx4 );
+                    mat_flat[11] = saturate(sumx2y);
                     start_solver <= 1;
                     state <= SOLVE;
                 end
@@ -239,7 +243,8 @@ module accumulator #(
                   end
             WAIT: 
                 if (solver_done && ready_in) begin
-                    logic fallback = singular_err;
+                    logic fallback;
+                    assign fallback = singular_err;
 
                     // fallback: beta[0] = mean payoff; beta[1] = beta[2] = 0
                     if (fallback) begin
@@ -275,17 +280,23 @@ module accumulator #(
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) v_acc && accum_barrier_ready |-> $stable(x2) && $stable(xy) && $stable(x2y) && $stable(x3) && $stable(x4)) 
             else $error("Mul desync on stall"); //sync
+        
 
         assert property (@(posedge clk) disable iff (!rst_n) !ready_out |-> !valid_out) //handsjake invar
             else $error("Output valid while not ready");
+        
 
         assert property (@(posedge clk) disable iff (!rst_n) singular_err |=> singular_err) //singluar stickiness
             else $error("singular_err not sticky");
         
+        
 	    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta)) 
             else $error("Accumulator: Output stall overwrite");
+        
 
         assert property (@(posedge clk) disable iff (!rst_n) v_x2 |-> v_x2) 
             else $error("Desync in initial muls");
+
+        
     end
 endmodule

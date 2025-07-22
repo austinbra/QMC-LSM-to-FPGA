@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 //-----------------------------------------------------------
 // Approximates Z score using Zelen & Severo rational polynomial
 //-----------------------------------------------------------
@@ -40,31 +41,33 @@ module fxInvCDF_ZS #(
     logic barrier_ready;
 
     assign barrier_ready = mul_t2_ready && mul_c1t_ready && mul_c2t2_ready && mul_d1t_ready && mul_d2t2_ready && mul_d3t3_ready && div_nd_ready;
-    assign ready_out = !skid_valid || (barrier_ready && ready_in);
+    
     
 //skid buffer
     logic v0;
-    logic skid_valid, skid_negate;
+    logic buf_valid, buf_negate;
     logic [WIDTH-1:0] skid_t;
     logic accept;
-    assign accept  = valid_in && ready_out && !skid_valid;
-
+    
+    assign accept  = valid_in && ready_out && !buf_valid;
+    assign ready_out = !buf_valid || (barrier_ready && ready_in);
+    
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            skid_valid <= 0;
+            buf_valid <= 0;
         end else if (accept) begin
             skid_t <= t;
-            skid_negate <= negate;
-            skid_valid <= 1;
-        end else if (ready_in && skid_valid) 
-            skid_valid <= '0;  // Drain on ready
+            buf_negate <= negate;
+            buf_valid <= 1;
+        end else if (ready_in && buf_valid) 
+            buf_valid <= '0;  // Drain on ready
     end
     logic [WIDTH-1:0] t_eff;
     logic negate_eff;
 
-    assign t_eff = skid_valid ? skid_t : t;
-    assign negate_eff = skid_valid ? skid_negate : negate;
-    assign v0 = (skid_valid || valid_in) && barrier_ready;
+    assign t_eff = buf_valid ? skid_t : t;
+    assign negate_eff = buf_valid ? buf_negate : negate;
+    assign v0 = (buf_valid || valid_in) && barrier_ready;
 
 // Multipliers
     logic v1a, v1b;       // valid_out of stage 1
@@ -213,21 +216,25 @@ module fxInvCDF_ZS #(
                 valid_out <= 1;
                 z <= negate_pipe[INV_LATENCY-1] ? -(t_eff - ratio) : (t_eff - ratio);
             end else 
-                valid_out <= '0';
+                valid_out <= '0;
         end
     end
 
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) !ready_out |-> !valid_out) 
             else $error("Output valid while not ready");
+        
 
         assert property (@(posedge clk) disable iff (!rst_n) v4 && barrier_ready |-> $stable(num) && $stable(den)) 
             else $error("Desync on partial stall");
+        
 
         assert property (@(posedge clk) disable iff (!rst_n) v4 |-> $stable(negate_pipe)) 
             else $error("Negate pipe misaligned"); //if submodules have variable latency, misalignment could negate wrong
+        
 
         assert property (@(posedge clk) disable iff (!rst_n) !ready_in |-> !barrier_ready) 
             else $error("Barrier not respecting downstream stall");
+        
     end
 endmodule

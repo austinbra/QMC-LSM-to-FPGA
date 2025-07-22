@@ -18,7 +18,7 @@ module tb_regression;
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .valid_in(valid_in), .mat_flat(mat_flat),
-        .ready_out(ready_out), .ready_in(ready_in),
+        .ready_out(ready_out), .ready_in(ready_in),.solver_ready(1'b1),
         .valid_out(valid_out), .singular_err(singular_err),
         .beta(beta)
     );
@@ -39,10 +39,8 @@ module tb_regression;
         $display("Cycle %t: Reset deasserted", $time);
 
         // Send matrix with stalls
-        valid_in = 1;
-        mat_flat = '{1<<<QFRAC, 2<<<QFRAC, 3<<<QFRAC, 4<<<QFRAC, 5<<<QFRAC, 6<<<QFRAC, 7<<<QFRAC, 8<<<QFRAC, 9<<<QFRAC, 10<<<QFRAC, 11<<<QFRAC, 12<<<QFRAC};  // Sample matrix
-        ready_in = 0; #20 ready_in = 1;  // Stall
-        $display("Cycle %t: Input sent with stall", $time);
+        valid_in = 1; ready_in = 0; #20 ready_in = 1;
+        mat_flat = '{1<<<QFRAC, 2<<<QFRAC, 3<<<QFRAC, 4<<<QFRAC, 5<<<QFRAC, 6<<<QFRAC, 7<<<QFRAC, 8<<<QFRAC, 9<<<QFRAC, 10<<<QFRAC, 11<<<QFRAC, 12<<<QFRAC};  // Sample matrix        
 
         // Wait for output
         #200 if (valid_out) $display("Cycle %t: Beta=%p, singular=%b", $time, beta, singular_err);

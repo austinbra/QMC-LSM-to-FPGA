@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 module fxExpLUT #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT      = fpga_cfg_pkg::FP_QINT,
@@ -33,23 +34,29 @@ module fxExpLUT #(
                 a_bound <= A_MIN;
             else if (a > A_MAX) 
                 a_bound <= A_MAX;
+            else if (a == 0) 
+                a_bound <= 1 <<< (QFRAC - 1);
             else 
                 a_bound <= a;
         end
     end
 
     // lut_indexess into BRAM
-    logic is_neg = (a_bound < 0);
-    logic [LUT_BITS-1:0] lut_index = is_neg ? (-a_bound[QFRAC-1 -: LUT_BITS]) : a_bound[QFRAC-1 -: LUT_BITS];
+    logic is_neg;
+    assign is_neg = (a_bound < 0);
+    logic [LUT_BITS-1:0] lut_index;
+    assign lut_index = is_neg ? (-a_bound[QFRAC-1 -: LUT_BITS]) : a_bound[QFRAC-1 -: LUT_BITS];
 
     (* rom_style="block" *)
     logic [WIDTH-1:0] lut [0:(1<<LUT_BITS)-1];
-    initial $readmemh("../gen/exp_lut_4096.hex", lut);
+    initial $readmemh("exp_lut_4096.mem", lut);
 
     // One‑cycle read
     logic signed [WIDTH-1:0] result_reg;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n)
+            result_reg <= '0;
+        else if (!valid_in)
             result_reg <= '0;
         else if (valid_in && ready_out)
             result_reg <= is_neg ? ((1 <<< QFRAC) / lut[lut_index]) : lut[lut_index];
@@ -71,6 +78,7 @@ module fxExpLUT #(
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result)) 
             else $error("ExpLUT stall overwrite");
+        
     end
 
 endmodule

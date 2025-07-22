@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 module fxlnLUT #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT      = fpga_cfg_pkg::FP_QINT,
@@ -33,6 +34,8 @@ module fxlnLUT #(
                 a_bound <= A_MIN;
             else if (a > A_MAX)
                 a_bound <= A_MAX;
+            else if (a == 0) 
+                a_bound <= A_MIN;
             else
                 a_bound <= a;
         end
@@ -44,7 +47,7 @@ module fxlnLUT #(
 
     (* rom_style="block" *)
     logic [WIDTH-1:0] lut [0:(1<<LUT_BITS)-1];
-    initial $readmemh("../gen/ln_lut_4096.hex", lut);
+    initial $readmemh("ln_lut_4096.mem", lut);
 
     logic [WIDTH-1:0] result_reg;
     always_ff @(posedge clk or negedge rst_n) begin
@@ -71,5 +74,6 @@ module fxlnLUT #(
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result)) 
             else $error("LnLUT stall overwrite");
+        
     end
 endmodule

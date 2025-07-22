@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 // approximates square result using newton-raphson algorithm
 
 // 1-cycle LUT + 2-iteration Newton–Raphson on 1/√x
@@ -25,13 +26,37 @@ module fxSqrt #(
     input  logic [WIDTH-1:0] a,
     output logic [WIDTH-1:0] result
 );
+    // ----------------------------------------------------------------------
+    // Input skid buffer (single‑entry) to match formatting in fxMul/fxLnLUT
+    // ----------------------------------------------------------------------
+    logic                      skid_valid;
+    logic [WIDTH-1:0]          skid_a;
+    assign ready_out = !skid_valid || ready_in;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            skid_valid <= 1'b0;
+            skid_a     <= '0;
+        end else if (valid_in && ready_out) begin
+            skid_valid <= 1'b1;
+            skid_a     <= a;
+        end else if (ready_in && skid_valid) begin
+            skid_valid <= 1'b0;
+        end
+    end
+    logic [WIDTH-1:0]          a_in;
+    assign a_in = skid_valid ? skid_a : a;
 
     logic accept;
-    assign accept = valid_in && ready_out;
+    assign accept = (skid_valid ? skid_a : a) && ready_in;
     logic v0, v1, v2, v3, v4;
 
     localparam signed [WIDTH-1:0] ONE_POINT_FIVE = (3 << (QFRAC-1));  // 1.5
     localparam signed [WIDTH-1:0] HALF           = 1 << (QFRAC-1);     // 0.5
+
+    logic mul3_ready, mul4_ready;
+    logic mul_barrier_ready;
+    assign mul_barrier_ready = mul3_ready && mul4_ready;
 
     //--------------------------------------------------------------------------
     // normalisation (combinational, tiny)
@@ -40,7 +65,8 @@ module fxSqrt #(
     logic [$clog2(QINT+1)-1:0] exp_adj, exp_adj_reg;
     
     always_comb begin
-        a_norm  = a;
+        a_norm  = a_in;
+
         exp_adj = '0;
 
         for (int s = 0; s < QINT; s++) begin
@@ -50,11 +76,14 @@ module fxSqrt #(
             end
         end
     end
-    always_ff @(posedge clk) if (accept) begin
-        a_norm_reg <= a_norm;
-        exp_adj_reg <= exp_adj;
+    always_ff @(posedge clk or negedge rst_n) begin 
+        if (!rst_n) 
+            {a_norm_reg, exp_adj_reg} <= '0;
+        else if (accept) begin
+            a_norm_reg <= a_norm;
+            exp_adj_reg <= exp_adj;
+        end
     end
-
     // -------------------------------------------------------------------------
     // Stage 0:  LUT for r0  ( 1/sqrt(a))
     // -------------------------------------------------------------------------
@@ -64,7 +93,7 @@ module fxSqrt #(
 
     (* rom_style="block" *)
     logic signed [WIDTH-1:0] sqrt_lut [0:(1<<LUT_BITS)-1];
-    initial $readmemh("../gen/sqrt_lut_256.hex", sqrt_lut);
+    initial $readmemh("sqrt_lut_256.mem", sqrt_lut);
 
     logic signed [WIDTH-1:0] v0_result, a_v0;
     assign v0 = valid_in && ready_out;
@@ -76,7 +105,7 @@ module fxSqrt #(
             a_v0 <= '0;
             v0_result <= '0;
         end else if (v0) begin
-            a_v0  <= a;
+            a_v0  <= a_in;
             v0_result <= sqrt_lut[lut_index];
         end
     end
@@ -112,7 +141,6 @@ module fxSqrt #(
     // ---------------------------------------
     // Stage-2 :  a * r0^2
     // ---------------------------------------
-    logic mul3_ready;
     logic signed [WIDTH-1:0] mul2_result;
 
     fxMul #(.LATENCY(2)) mul2 (
@@ -155,7 +183,6 @@ module fxSqrt #(
     wire signed [WIDTH-1:0] term;
     assign term = ONE_POINT_FIVE - (v2_result >>> 1);
 
-    logic mul4_ready;
     logic signed [WIDTH-1:0] mul3_result;
 
     fxMul #(.LATENCY(2)) mul3 (
@@ -164,7 +191,7 @@ module fxSqrt #(
         .valid_in  (v2),
         .ready_out (mul3_ready),
         .valid_out (v3),
-        .ready_in  (mul4_ready),
+        .ready_in  (mul_barrier_ready),
         .a         (r0_hold_2),
         .b         (term),
         .result    (mul3_result)
@@ -212,9 +239,17 @@ module fxSqrt #(
 
     assign valid_out = v4;
     assign result = v4_result;
+    property stall_stable;
+        @(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result);
+    endproperty
 
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result));
+        
+        
+        assert property (stall_stable) 
+            else $error("fxSqrt stall overwrite");
+        
     end
 
 

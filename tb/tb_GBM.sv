@@ -49,8 +49,9 @@ module tb_GBM;
             sigma = $urandom % (1 <<< 5);
             dt = $urandom % (1 <<< 5);
             ready_in = ($urandom % 10 > 2) ? 1 : 0;  // 30% stall
-            if (valid_in && ready_out) $display("Cycle %t: Input accepted - z=%d, S=%d", $time, z, S);
+            if (valid_in && ready_out) $display("Cycle %t: Input accepted (ready_out=%b) - z=%d, S=%d", $time, ready_out, z, S);
             if (!ready_in) $display("Cycle %t: Stall simulated", $time);
+            if (i == 5) sigma = 0;
         end
 
         // Edge: sigma=0 (no diffusion)
@@ -59,6 +60,7 @@ module tb_GBM;
 
         // Edge: Negative z (price decrease)
         z = - (1 <<< 8); #10;
+        valid_in = 1; #10;
 
         #200 $finish;
     end
@@ -66,6 +68,7 @@ module tb_GBM;
     // Assertions
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next)) else $error("GBM stall overwrite");
+        assert (S_next < S) else $error("Negative z didn't decrease price");
     end
 
 endmodule

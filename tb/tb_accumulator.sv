@@ -20,7 +20,7 @@ module tb_accumulator;
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .valid_in(valid_in), .valid_out(valid_out),
-        .ready_in(ready_in), .ready_out(ready_out),
+        .ready_in(ready_in), .ready_out(ready_out), .solver_ready(1'b1),
         .x_in(x_in), .y_in(y_in),
         .beta(beta)
     );
@@ -49,8 +49,9 @@ module tb_accumulator;
             x_in = $urandom % (1 <<< 10);  // Small positive S_t
             y_in = $urandom % (1 <<< 8);   // Small payoff
             ready_in = ($urandom % 10 > 3) ? 1 : 0;  // 30% stall chance
-            if (valid_in && ready_out) $display("Cycle %t: Input accepted - x_in=%d, y_in=%d", $time, x_in, y_in);
+            if (valid_in && ready_out) $display("Cycle %t: Input accepted (ready_out=%b) - x_in=%d, y_in=%d", $time, ready_out, x_in, y_in);
             if (!ready_in) $display("Cycle %t: Simulated stall (ready_in low)", $time);
+            if (i == 5) y_in = - (1 <<< 8);  // Test negative
         end
 
         // Wait for output and check
@@ -68,6 +69,7 @@ module tb_accumulator;
     // Assertions
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta)) else $error("Accumulator stall overwrite");
+        assert (beta[0] > 0) else $error("Unexpected negative beta[0]");
     end
 
 endmodule

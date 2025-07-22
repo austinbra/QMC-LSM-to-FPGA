@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 module GBM #(
     parameter int WIDTH       = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT        = fpga_cfg_pkg::FP_QINT,
@@ -36,7 +37,19 @@ module GBM #(
     sample_t in_buf;
     logic buf_valid;
     
+    logic mul_sigma2_ready, mul_drift_ready, sqrt_blk_ready, mul_sigma_sqrt_ready, mul_diffusion_ready, explut_ready, recip_ready, mul_price_ready;
+    logic drift_barrier;
+    logic diffusion_barrier;
+    logic exp_barrier;
+    logic shift_en;
 
+
+    assign drift_barrier = mul_sigma2_ready && mul_drift_ready;
+    assign diffusion_barrier = sqrt_blk_ready && mul_sigma_sqrt_ready && mul_diffusion_ready;
+    assign exp_barrier = explut_ready && recip_ready;
+    assign ready_out = (!buf_valid || (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready));
+    assign shift_en = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
+    
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             buf_valid <= 0;
@@ -51,18 +64,7 @@ module GBM #(
         end
     end
 
-    logic mul_sigma2_ready, mul_drift_ready, sqrt_blk_ready, mul_sigma_sqrt_ready, mul_diffusion_ready, explut_ready, recip_ready, mul_price_ready;
-    logic drift_barrier;
-    logic diffusion_barrier;
-    logic exp_barrier;
-    logic shift_en;
-
-
-    assign drift_barrier = mul_sigma2_ready && mul_drift_ready;
-    assign diffusion_barrier = sqrt_blk_ready && mul_sigma_sqrt_ready && mul_diffusion_ready;
-    assign exp_barrier = explut_ready && recip_ready;
-    assign ready_out = (!buf_valid || (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready));
-    assign shift_en = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
+    
     
     // ----------------------------------------------------------------------
     // 1. DRIFT branch :  (r – 0.5 σ²) * dt
@@ -213,12 +215,15 @@ module GBM #(
     initial begin
         assert property (@(posedge clk) sigma2 >= 0) 
             else $error("Negative sigma2 in GBM");
+        
 
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next)) 
             else $error("GBM: Backpressure violation");
         
+        
         assert property (@(posedge clk) disable iff (!rst_n) (drift_v_out != diff_v_out) |-> ##1 !join_valid) 
             else $error("GBM: Lagging branch");
+        
         
     end
 endmodule

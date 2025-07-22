@@ -43,13 +43,14 @@ module tb_inverseCDF;
             valid_in = $urandom % 2;
             u_in = $urandom % (1 <<< QFRAC);  // [0,1)
             ready_in = ($urandom % 10 > 2) ? 1 : 0;
-            if (valid_in && ready_out) $display("Cycle %t: Input accepted - u_in=%d", $time, u_in);
+            if (valid_in && ready_out) $display("Cycle %t: Input accepted  - u_in=%d", $time, u_in);
             if (!ready_in) $display("Cycle %t: Stall", $time);
         end
 
         // Edge: u_in=0 (z_out ≈ -inf, but clamped)
         u_in = 0; valid_in = 1; #50;
         if (valid_out) $display("Cycle %t: Output z_out=%d (expected large negative)", $time, z_out);
+        
 
         // Edge: u_in close to 1 (z_out positive)
         u_in = (1 <<< QFRAC) - 1; #50;
@@ -60,6 +61,7 @@ module tb_inverseCDF;
     // Assertions
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z_out)) else $error("InvCDF stall overwrite");
+        assert (z_out < 0) else $error("Zero u_in didn't produce negative z");
     end
 
 endmodule

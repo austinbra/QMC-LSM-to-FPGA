@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 module lsm_decision #( //sequential
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT      = fpga_cfg_pkg::FP_QINT,
@@ -22,12 +23,13 @@ module lsm_decision #( //sequential
 );
     //BUFFER
     typedef struct packed { 
-        logic signed [WIDTH-1:0] S_t, 
-        logic signed [WIDTH-1:0] beta[0:2];
+        logic signed [WIDTH-1:0] S_t;
         logic signed [WIDTH-1:0] strike;
         logic signed [WIDTH-1:0] disc;
     } input_t;
-
+    logic signed [WIDTH-1:0] beta_reg[0:2];
+    
+    
     input_t in_buf;
     logic buf_valid;
     logic shift_en;
@@ -36,10 +38,16 @@ module lsm_decision #( //sequential
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             buf_valid <= '0;
-            in_buf <= '{0, {0,0,0}, 0, 0};
+            in_buf <= '{0, 0, 0};
+            for (int i = 0; i < 3; i++) begin
+                beta_reg[i] <= '0;    // Reset unpacked array elements
+            end
         end else begin
             if (valid_in && ready_out) begin
-                in_buf <= '{S_t, beta, strike, disc};
+                in_buf <= '{S_t, strike, disc};
+                for (int i = 0; i < 3; i++) begin
+                    beta_reg[i] <= beta[i];
+                end
                 buf_valid <= 1;
             end else if (shift_en) begin
                 buf_valid <= '0;
@@ -126,7 +134,10 @@ module lsm_decision #( //sequential
     initial begin
 	    assert property (@(posedge clk) C_val >= 0) 
             else $error("Negative C_val in decision");
+        
+
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(PV)) 
             else $error("Decision: Stall violation");
+        
     end
 endmodule

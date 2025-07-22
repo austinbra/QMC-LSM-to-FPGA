@@ -45,7 +45,7 @@ module tb_inverseCDF_step1;
             valid_in = $urandom % 2;
             u = $signed($urandom % (1 <<< QFRAC));  // [0,1) in QFRAC
             ready_in = ($urandom % 10 > 2) ? 1 : 0;
-            if (valid_in && ready_out) $display("Cycle %t: Input accepted - u=%d", $time, u);
+            if (valid_in && ready_out) $display("Cycle %t: Input accepted (ready_out=%b) - u=%d", $time, ready_out, u);
             if (!ready_in) $display("Cycle %t: Stall", $time);
         end
 

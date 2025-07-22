@@ -1,7 +1,8 @@
+`timescale 1ns/1ps
 module regression #(// Deep pipelined Gaussian elimination (Q16.16)
 	parameter int WIDTH         		= fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT          		= fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC         		= fpga_cfg_pkg::FP_QFRAC,
+    parameter int QFRAC         		= fpga_cfg_pkg::FP_QFRAC
 )(
     input  logic clk,
     input  logic rst_n,
@@ -103,7 +104,7 @@ module regression #(// Deep pipelined Gaussian elimination (Q16.16)
 		if (!rst_n)
 			v1 <= 0;
 		else begin
-			v1 <= v0 && stage0_barrier_ready;
+			v1 <= v0;
         // Unrolled assignments for readability/retiming
             mat1[0][0] <= mat0[pivot0_row][0];
             mat1[0][1] <= mat0[pivot0_row][1];
@@ -148,10 +149,10 @@ module regression #(// Deep pipelined Gaussian elimination (Q16.16)
                 .valid_in(v1 && !pivot0_is_zero),
 				.valid_out(div0_done[g]),
                 .ready_in(stage3_barrier_ready), 
-                .ready_out(div0_ready[g])
+                .ready_out(div0_ready[g]),
                 .numerator(div0_num[g]), 
                 .denominator(div0_den[g]), 
-                .result(div0_res[g]),
+                .result(div0_res[g])
             );
     	end
 	endgenerate
@@ -160,7 +161,7 @@ module regression #(// Deep pipelined Gaussian elimination (Q16.16)
 		if (!rst_n)
 			v2 <= 0;
 		else begin
-			v2 <= (&div0_done) && !pivot0_is_zero//if all divisions are complete
+			v2 <= (&div0_done) && !pivot0_is_zero;//if all divisions are complete
 			// Unrolled for mat2 just cuz
             mat2[0][0] <= div0_res[0];
             mat2[0][1] <= div0_res[1];
@@ -191,7 +192,7 @@ module regression #(// Deep pipelined Gaussian elimination (Q16.16)
 		fxMul #() m0(
 			.clk(clk), .rst_n(rst_n), 
             .valid_in(v2),
-			.valid_out(mul0_done_r0[c])
+			.valid_out(mul0_done_r0[c]),
             .ready_out(mul0_ready_r0[c]), 
             .ready_in(stage5_barrier_ready),
             .a(mat2[1][0]), 
@@ -323,7 +324,7 @@ module regression #(// Deep pipelined Gaussian elimination (Q16.16)
 
     generate for (genvar j = 1; j < 4; j++) begin : ELIM_MUL
         logic signed [WIDTH-1:0] mul_res;
-        fxMul_always #() mul_elim (
+        fxMul #() mul_elim (
             .clk(clk), .rst_n(rst_n), 
             .valid_in(v5),
             .valid_out(mul_elim_valid[j-1]),
@@ -463,7 +464,7 @@ module regression #(// Deep pipelined Gaussian elimination (Q16.16)
         .result(prod01)
 	);
 
-    fxMul_always #() mul02 (
+    fxMul #() mul02 (
         .clk(clk), .rst_n(rst_n), 
         .valid_in(v7c),
         .valid_out (v7c1), 
@@ -536,13 +537,17 @@ module regression #(// Deep pipelined Gaussian elimination (Q16.16)
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta)) 
             else $error("Regression output stall overwrite");
         
-        assert property (@(posedge clk) disable iff (!rst_n) skid_valid && !ready_in |=> $stable(skid_mat_flat)) 
-            else $error("Regression input skid stall overwrite");
+        
+        assert property (@(posedge clk) disable iff (!rst_n) buf_valid && !ready_in |=> $stable(buf_mat_flat)) 
+            else $error("Regression input buffer stall overwrite");
+        
         
         assert property (@(posedge clk) disable iff (!rst_n) singular_err |=> singular_err) 
             else $error("singular_err not sticky");
         
+        
         assert property (@(posedge clk) disable iff (!rst_n) v2 && stage2_barrier_ready |-> $stable(mat2)) 
             else $error("Stage2 desync on stall");
+        
     end
 endmodule

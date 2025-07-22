@@ -45,7 +45,7 @@ module tb_sobol;
             idx_in = i;
             dim_in = $urandom % M;
             ready_in = ($urandom % 10 > 2) ? 1 : 0;
-            if (valid_in && ready_out) $display("Cycle %t: Input accepted - idx=%d, dim=%d", $time, idx_in, dim_in);
+            if (valid_in && ready_out) $display("Cycle %t: Input accepted (ready_out=%b) - idx=%d, dim=%d", $time, ready_out, idx_in, dim_in);
             if (!ready_in) $display("Cycle %t: Stall", $time);
         end
 
@@ -62,6 +62,7 @@ module tb_sobol;
     // Assertions
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(sobol_out)) else $error("Sobol stall overwrite");
+        assert (sobol_out == 0) else $error("Zero idx didn't produce 0");
     end
 
 endmodule

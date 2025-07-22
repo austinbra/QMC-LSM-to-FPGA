@@ -1,3 +1,4 @@
+`timescale 1ns/1ps
 // Convert sobol sequence number to x ∈ (0,0.5]
 module inverseCDF_step1 #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
@@ -54,6 +55,7 @@ module inverseCDF_step1 #(
     initial begin
 	assert property (@(posedge clk) disable iff (!rst_n) valid_in && !ready_out |=> $stable(u)) 
         else $error("Step1: Input overwrite");
+    
     end
 
 endmodule

@@ -10,9 +10,9 @@ int main(){
     const int M = 50; // Number of dimensions
     const int BITS = 32; // Number of direction values per dimension
 
-    std::ifstream infile("gen/joe-kuo-6.21201.txt");
+    std::ifstream infile("gen/joe-kuo-6.21201.mem");
     if (!infile) {
-        std::cerr << "cant open joe-kuo-6.21201.txt\n";
+        std::cerr << "cant open joe-kuo-6.21201.mem\n";
         return 1;
     }
 
