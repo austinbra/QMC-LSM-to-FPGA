@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 module sobol #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,   // 16, 32, 64...
-    parameter int M         = 50,                       // time-steps "dimensions"
+    parameter int M         = 50,                       // total time-steps "dimensions"
     parameter int LANE_ID   = 0
 )(
     input  logic                         clk,
@@ -28,7 +28,7 @@ module sobol #(
         gray = idx_in ^ (idx_in >>> 1); 
     end
     //one on/off shifts the new dot into the biggest available gap.
-    //Because the recipe is deterministic, the generator never stores the earlier points.
+    //Because the reciprical is deterministic, the generator never stores the earlier points.
     //You just feed in the row index i and the formula dictates the new coordinate
 
 
