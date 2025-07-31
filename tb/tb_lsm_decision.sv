@@ -66,5 +66,28 @@ module tb_lsm_decision;
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(PV)) else $error("Decision stall overwrite");
         assert (PV > 0) else $error("Exercise case didn't yield positive PV");
     end
+    // Verification Section
+    int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
+    logic test_passed = 1;
+    always @(posedge clk) begin
+        if (valid_in && ready_out) inputs_sent++;
+        if (valid_out) outputs_received++;
+        if (!ready_in && valid_out) stall_cycles++;
+    end
 
+    final begin
+        if (inputs_sent != outputs_received) begin
+            $display("Handshake FAIL: Inputs=%d, Outputs=%d", inputs_sent, outputs_received);
+            test_passed = 0;
+        end else $display("Handshake PASS: All %d inputs processed", inputs_sent);
+
+        // Correctness: PV >=0, exercise if payoff > continuation
+        if (valid_out && PV < 0) begin
+            $display("Output FAIL: Negative PV=%d", PV);
+            test_passed = 0;
+        end else $display("Output PASS: PV=%d", PV);
+
+        if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
+        if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
 endmodule

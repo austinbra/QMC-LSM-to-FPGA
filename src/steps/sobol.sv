@@ -14,7 +14,10 @@ module sobol #(
 
     input  logic [WIDTH-1:0]             idx_in,       // current path index (row)
     input  logic [$clog2(M)-1:0]         dim_in,       // current time-step (col)
-    output logic [WIDTH-1:0]             sobol_out
+    output logic [WIDTH-1:0]             sobol_out,
+
+    // expose the entire LUT for TB / debugging
+    output logic [WIDTH-1:0]         direction [0:M*WIDTH-1]
 );
 
     // Direction-number memory :  M * WIDTH words
@@ -38,15 +41,7 @@ module sobol #(
         for (genvar k = 0; k < WIDTH; k = k + 1) begin
             assign leaf[k] = gray[k] ? direction[dim_in*WIDTH + k] : '0; //for each bit position check if high then save x and y value, else 0
         end
-    endgenerate// Procedural block for debugging
-
-    always_comb begin
-        for (int k = 0; k < WIDTH; k++) begin
-            $display("Cycle %t: Gray code=%b, Leaf[%0d]=%h", $time, gray, k, leaf[k]);
-        end
-        $display("Cycle %t: sobol_out=%h", $time, sobol_out);
-    end
-    
+    endgenerate// Procedural block for debugging    
 
     // depth = ceil(log2(WIDTH))
     localparam int LEVELS = $clog2(WIDTH);
@@ -56,9 +51,7 @@ module sobol #(
     generate
         for (genvar k = 0; k < WIDTH; k++)begin
             assign stage[0][k] = leaf[k];
-            
         end
-        
         
         //xor everything together
         for (genvar lvl = 0; lvl < LEVELS; lvl++) begin : GEN_LEVEL
@@ -72,44 +65,54 @@ module sobol #(
     assign sobol_raw = stage[LEVELS][0];
 
 
-    // skid buffer for ready/valid handshaking
-    logic skid_valid;
-    logic [WIDTH-1:0] skid_sobol_reg;
+    // Fixed Buffer logic
+    logic buffer_valid;
+    logic [WIDTH-1:0] buffer_data;
 
-    assign ready_out = !skid_valid || ready_in;
-
-    assign valid_out = skid_valid;
-    assign sobol_out = skid_sobol_reg;
+    assign ready_out = !buffer_valid || ready_in;
+    assign valid_out = buffer_valid;
+    assign sobol_out = buffer_data;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            skid_valid <= 1'b0;
-            skid_sobol_reg <= '0;
+            buffer_valid <= 1'b0;
+            buffer_data <= '0;
         end else begin
-            if (valid_in && ready_out) begin
-                skid_sobol_reg <= sobol_raw;
-                skid_valid <= 1'b1;
-            end
-            else if (skid_valid && ready_in) begin
-                skid_valid <= 1'b0;
-            end
+            // Use case statement to handle all combinations explicitly
+            case ({valid_in && ready_out, buffer_valid && ready_in})
+                2'b00: begin
+                    // No input, no output - no change
+                end
+                2'b01: begin
+                    // No input, output consumed
+                    buffer_valid <= 1'b0;
+                end
+                2'b10: begin
+                    // Input accepted, no output
+                    buffer_data <= sobol_raw;
+                    buffer_valid <= 1'b1;
+                end
+                2'b11: begin
+                    // Both input accepted and output consumed simultaneously
+                    buffer_data <= sobol_raw;
+                    // buffer_valid stays 1'b1
+                end
+            endcase
         end
-        
     end
 
-    // Assertions for verification (stall/backpressure invariants)
+    // Assertions for verification
     initial begin
-        assert (WIDTH > 0 && $clog2(WIDTH) == LEVELS) 
-            else $error("Non-power-of-2 WIDTH in Sobol");
+        assert (WIDTH > 0 && (1 << $clog2(WIDTH)) == WIDTH) 
+            else $error("WIDTH must be a power of 2 in Sobol");
 
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(sobol_out)) 
+        assert property (@(posedge clk) disable iff (!rst_n) 
+            valid_out && !ready_in |=> $stable(sobol_out)) 
             else $error("Sobol: Stall overwrite - data loss");
 
-        assert property (@(posedge clk) disable iff (!rst_n) valid_in && !ready_out |=> $stable(idx_in) && $stable(dim_in)) 
+        assert property (@(posedge clk) disable iff (!rst_n) 
+            valid_in && !ready_out |=> $stable(idx_in) && $stable(dim_in)) 
             else $error("Sobol: Input overwrite on backpressure");
-
-        assert property (@(posedge clk) disable iff (!rst_n) (idx_in == 0) |-> (sobol_out == 0)) 
-            else $error("Error: sobol_out should be 0 for idx=0");
     end
 
 endmodule

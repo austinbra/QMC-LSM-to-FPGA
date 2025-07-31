@@ -72,4 +72,31 @@ module tb_accumulator;
         assert (beta[0] > 0) else $error("Unexpected negative beta[0]");
     end
 
+    // Verification Section: Check outputs and handshakes
+    int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
+    logic test_passed = 1;
+    always @(posedge clk) begin
+        if (valid_in && ready_out) inputs_sent++;
+        if (valid_out) outputs_received++;
+        if (!ready_in && valid_out) stall_cycles++;  // Count stalls
+    end
+
+    final begin  // At sim end
+        // Handshake check: Inputs == Outputs (no loss)
+        if (inputs_sent != outputs_received) begin
+            $display("Handshake FAIL: Inputs sent=%d, Outputs received=%d (possible data loss)", inputs_sent, outputs_received);
+            test_passed = 0;
+        end else $display("Handshake PASS: All %d inputs processed", inputs_sent);
+
+        // Output correctness: Betas reasonable (e.g., positive for sample data)
+        if (valid_out && (beta[0] <= 0 || beta[1] < 0)) begin
+            $display("Output FAIL: Unexpected betas (%p) - expected positive", beta);
+            test_passed = 0;
+        end else $display("Output PASS: Reasonable betas (%p)", beta);
+
+        // Stall check: Stalls occurred but no overwrite (from assert)
+        if (stall_cycles > 0) $display("Stalls detected (%d cycles) - check asserts for integrity", stall_cycles);
+
+        if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+      end
 endmodule

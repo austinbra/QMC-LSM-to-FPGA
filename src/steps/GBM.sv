@@ -73,6 +73,7 @@ module GBM #(
     assign drift_v_in = buf_valid && shift_en;
 
     logic drift_v_mid, drift_v_out;
+    logic join_ready;
     logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
     
 
@@ -150,7 +151,6 @@ module GBM #(
     (* preserve = 1 *) logic join_valid; //preservatin for retiming
     assign join_valid = drift_v_out && diff_v_out;
 
-    logic join_ready;
     assign join_ready = drift_barrier && diffusion_barrier && mul_price_ready; //barrier ready
 
     logic signed [WIDTH-1:0] exp_arg;

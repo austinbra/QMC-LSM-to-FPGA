@@ -41,7 +41,7 @@ module tb_GBM;
 
         // 10 transactions with stalls
         for (int i = 0; i < 10; i++) begin
-            @(posedge clk);
+                    @(posedge clk);
             valid_in = $urandom % 2;
             z = $signed($urandom % (1 <<< 10)) - (1 <<< 9);  // +/- range
             S = $urandom % (1 <<< 10);  // Positive price
@@ -50,9 +50,9 @@ module tb_GBM;
             dt = $urandom % (1 <<< 5);
             ready_in = ($urandom % 10 > 2) ? 1 : 0;  // 30% stall
             if (valid_in && ready_out) $display("Cycle %t: Input accepted (ready_out=%b) - z=%d, S=%d", $time, ready_out, z, S);
-            if (!ready_in) $display("Cycle %t: Stall simulated", $time);
+                    if (!ready_in) $display("Cycle %t: Stall simulated", $time);
             if (i == 5) sigma = 0;
-        end
+    end
 
         // Edge: sigma=0 (no diffusion)
         valid_in = 1; sigma = 0; #10;
@@ -63,7 +63,7 @@ module tb_GBM;
         valid_in = 1; #10;
 
         #200 $finish;
-    end
+        end
 
     // Assertions
     initial begin
@@ -71,4 +71,28 @@ module tb_GBM;
         assert (S_next < S) else $error("Negative z didn't decrease price");
     end
 
+    // Verification Section: Check outputs and handshakes
+    int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
+    logic test_passed = 1;
+    always @(posedge clk) begin
+        if (valid_in && ready_out) inputs_sent++;
+        if (valid_out) outputs_received++;
+        if (!ready_in && valid_out) stall_cycles++;
+    end
+
+    final begin
+        if (inputs_sent != outputs_received) begin
+            $display("Handshake FAIL: Inputs=%d, Outputs=%d", inputs_sent, outputs_received);
+            test_passed = 0;
+        end else $display("Handshake PASS: All %d inputs processed", inputs_sent);
+
+        // Output correctness: S_next >0, approximate growth for positive z
+        if (valid_out && S_next <= 0) begin
+            $display("Output FAIL: Negative S_next=%d", S_next);
+                test_passed = 0;
+        end else $display("Output PASS: Reasonable S_next=%d", S_next);
+
+        if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
+        if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
 endmodule

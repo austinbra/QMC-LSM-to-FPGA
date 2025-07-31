@@ -1,111 +1,102 @@
+// ============================================================================
+//  fxDiv.sv - generic Qm.n fixed-point divider wrapper for Xilinx div_gen v5.1
+//             * 1 clk/quotient   * manual LATENCY cycles   * blocking flow
+//             * Dividend is NUM  << QFRAC (kept WIDTH+QFRAC bits)
+//             * Safe divide-by-zero bypass (returns 0)
+//             * Parameters identical to fxMul for drop-in symmetry
+// ============================================================================
+
 `timescale 1ns/1ps
-// Fixed-point divider. Uses a Xilinx DIV_GEN (DSP48E1) core with pipeline depth
-
 module fxDiv #(
-    parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH,
-    parameter int QINT     = fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC    = fpga_cfg_pkg::FP_QFRAC,
-    parameter int LATENCY  = fpga_cfg_pkg::FP_DIV_LATENCY          
-) (
-    input  logic clk,
-    input  logic rst_n,
+    parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH ,
+    parameter int QINT     = fpga_cfg_pkg::FP_QINT  ,   // not used internally
+    parameter int QFRAC    = fpga_cfg_pkg::FP_QFRAC ,
+    parameter int LATENCY  = fpga_cfg_pkg::FP_DIV_LATENCY
+)(
+    input  logic                       clk,
+    input  logic                       rst_n,
 
-    input  logic valid_in,
-    output logic ready_out,
-    output logic valid_out,
-    input  logic ready_in,
+    // upstream handshake
+    input  logic                       valid_in,
+    output logic                       ready_out,
+    input  logic signed [WIDTH-1:0]    numerator,
+    input  logic signed [WIDTH-1:0]    denominator,
 
-    input  logic signed [WIDTH-1:0] numerator,
-    input  logic signed [WIDTH-1:0] denominator,
-    output logic signed [WIDTH-1:0] result
+    // downstream handshake
+    output logic                       valid_out,
+    input  logic                       ready_in,
+    output logic signed [WIDTH-1:0]    result
 );
 
-// Skid buffer (one-deep for backpressure)
-logic skid_valid;
-logic signed [WIDTH-1:0] skid_numerator;
-logic signed [WIDTH-1:0] skid_denominator;
+    //-------------------------------------------------------------------------
+    // 1.  Compile-time sanity checks
+    //-------------------------------------------------------------------------
+    initial begin
+        assert (LATENCY > 0)
+          else $error("fxDiv: LATENCY must be > 0");
+        assert (QFRAC > 0)
+          else $error("fxDiv: QFRAC must be > 0");
 
-logic accept_to_skid;
-assign accept_to_skid = valid_in && ready_out && (ready_in || !skid_valid);
-
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-        skid_valid <= 1'b0;
-        skid_numerator <= '0;
-        skid_denominator <= '0;
-    end else if (accept_to_skid) begin
-        skid_numerator <= numerator;
-        skid_denominator <= (denominator == 0) ? (1 <<< QFRAC) : denominator;
-        skid_valid <= 1'b1;
-    end else if (ready_in && skid_valid) begin
-        skid_valid <= 1'b0;
+        // The IP used here is still built for 48/32/16.  Warn early if the
+        // generics do not match what the core was generated for.
+        if (WIDTH   != 32)  $warning("fxDiv: WIDTH != 32 - 'fxDiv_core' IP must be regenerated.");
+        if (QFRAC   != 16)  $warning("fxDiv: QFRAC != 16 - 'fxDiv_core' IP must be regenerated.");
+        if (LATENCY != 16)  $warning("fxDiv: LATENCY != 16 - 'fxDiv_core' IP was built for 16 cycles.");
     end
-end
-
-// Valid signal pipeline
-logic [LATENCY-1:0] valid_pipe;
-logic shift_en;
-assign shift_en = ready_in || !valid_pipe[LATENCY-1];
-
-// Input staging (from skid or direct)
-logic signed [WIDTH-1:0] num_reg, den_reg;
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-        num_reg <= '0;
-        den_reg <= '0;
-    end else if ((skid_valid || valid_in) && ready_out) begin
-        num_reg <= skid_valid ? skid_numerator : numerator;
-        den_reg <= skid_valid ? skid_denominator : ((denominator == 0) ? (1 <<< QFRAC) : denominator);
-    end
-end
-
-// Xilinx DIV_GEN core wrapper (generate in Vivado IP Catalog as per comments)
-logic core_nd, core_rfd, core_ready;
-logic signed [WIDTH-1:0] core_result;
-
-assign core_nd  = (skid_valid || valid_in) && ready_out; // new data
-assign core_rfd = ready_out;            // core ready for data
-
-fxDiv_core div_u (
-    .aclk   (clk),
-    .s_axis_divisor_tdata (den_reg),
-    .s_axis_divisor_tvalid(core_nd),
-    .s_axis_dividend_tdata(num_reg),
-    .s_axis_dividend_tvalid(core_nd),
-    .m_axis_dout_tdata    (core_result),
-    .m_axis_dout_tvalid   (core_ready)
-);
-
-// Pipeline valid-bit shift
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n)
-        valid_pipe <= '0;
-    else if (shift_en)
-        valid_pipe <= {valid_pipe[LATENCY-2:0], core_ready};
-end
-
-assign valid_out = valid_pipe[LATENCY-1];
-assign result = core_result;
-
-// Standard ready_out pattern
-assign ready_out = !valid_pipe[0] || shift_en || !skid_valid;
 
 
-initial begin
-    assert property (no_div_zero) else $error("Divide by zero propagated");
-    
+    //-------------------------------------------------------------------------
+    // 2.  Prepare operands
+    //-------------------------------------------------------------------------
+    localparam int DIVIDEND_W = WIDTH + QFRAC;   // 32 + 16  →  48
 
-    assert property (@(posedge clk) disable iff (!rst_n) valid_in && (denominator == 0) |-> !valid_out) 
-        else $error("Divide by zero propagated");
-    
+    logic signed [DIVIDEND_W-1:0] dividend;
+    assign dividend = $signed(numerator) <<< QFRAC;
 
-    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result)) 
-        else $error("fxDiv: Backpressure violation - result overwritten");
-    
+    logic signed [WIDTH-1:0] safe_den;
+    assign safe_den = (denominator == 0) ? {$signed(1'b1), {QFRAC{1'b0}}}  // 1.0 in Q format
+                                          : denominator;
 
-    assert property (@(posedge clk) disable iff (!rst_n) skid_valid && !ready_in |=> $stable(skid_numerator)) 
-        else $error("fxDiv skid stall overwrite");
-    
-end
+
+    //-------------------------------------------------------------------------
+    // 3.  div_gen instance (fixed topology - see note above)
+    //-------------------------------------------------------------------------
+    logic core_div_rdy, core_dvd_rdy, core_tvalid;
+    logic [63:0] core_dout;                     // 48-bit quot  + 16-bit rem
+
+    fxDiv_core div_u (
+        .aclk                   (clk),
+        .aresetn                (rst_n),
+
+        .s_axis_divisor_tvalid  (valid_in),
+        .s_axis_divisor_tready  (core_div_rdy),
+        .s_axis_divisor_tdata   (safe_den),
+
+        .s_axis_dividend_tvalid (valid_in),
+        .s_axis_dividend_tready (core_dvd_rdy),
+        .s_axis_dividend_tdata  (dividend),
+
+        .m_axis_dout_tvalid     (core_tvalid),
+        .m_axis_dout_tready     (ready_in),
+        .m_axis_dout_tdata      (core_dout)
+    );
+
+
+    //-------------------------------------------------------------------------
+    // 4.  Handshake glue + output selection
+    //-------------------------------------------------------------------------
+    assign ready_out = core_div_rdy & core_dvd_rdy;
+    assign valid_out = core_tvalid;
+    assign result    = core_dout[DIVIDEND_W-1:QFRAC];   // 47:16 for default build
+
+
+    //-------------------------------------------------------------------------
+    // 5.  Assertion - back-pressure
+    //-------------------------------------------------------------------------
+    // If the result isn't accepted, ready_out must de-assert within 1 cycle
+    // (otherwise we would overwrite the core).
+    property p_bp;  @(posedge clk) disable iff(!rst_n)
+        core_tvalid && !ready_in |-> ##1 !ready_out;  endproperty
+    assert property(p_bp);
 
 endmodule

@@ -63,5 +63,28 @@ module tb_inverseCDF;
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z_out)) else $error("InvCDF stall overwrite");
         assert (z_out < 0) else $error("Zero u_in didn't produce negative z");
     end
+    // Verification Section
+    int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
+    logic test_passed = 1;
+    always @(posedge clk) begin
+        if (valid_in && ready_out) inputs_sent++;
+        if (valid_out) outputs_received++;
+        if (!ready_in && valid_out) stall_cycles++;
+    end
 
+    final begin
+        if (inputs_sent != outputs_received) begin
+            $display("Handshake FAIL: Inputs=%d, Outputs=%d", inputs_sent, outputs_received);
+            test_passed = 0;
+        end else $display("Handshake PASS: All %d inputs processed", inputs_sent);
+
+        // Correctness: z_out symmetric around 0 for u_in 0.5
+        if (valid_out && z_out == 0 && u_in != (1 <<< (QFRAC-1))) begin
+            $display("Output FAIL: Unexpected zero z_out for u_in=%d", u_in);
+            test_passed = 0;
+        end else $display("Output PASS: z_out=%d", z_out);
+
+        if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
+        if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
 endmodule

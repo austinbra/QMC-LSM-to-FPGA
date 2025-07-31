@@ -227,11 +227,12 @@ module fxSqrt #(
     );
 
     logic signed [WIDTH-1:0] v4_result;
+    logic [WIDTH-1:0] tmp;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             v4_result <= '0;
         end else if (v4 && ready_in) begin
-            logic [WIDTH-1:0] tmp = (mul4_result + HALF) >> QFRAC;
+            tmp = (mul4_result + HALF) >> QFRAC;
             v4_result <= tmp >> (exp_adj_reg >> 1);
         end
     end

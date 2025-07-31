@@ -63,5 +63,28 @@ module tb_inverseCDF_step1;
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(x)) else $error("Step1 stall overwrite");
     end
+    // Verification Section
+    int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
+    logic test_passed = 1;
+    always @(posedge clk) begin
+        if (valid_in && ready_out) inputs_sent++;
+        if (valid_out) outputs_received++;
+        if (!ready_in && valid_out) stall_cycles++;
+    end
 
+    final begin
+        if (inputs_sent != outputs_received) begin
+            $display("Handshake FAIL: Inputs=%d, Outputs=%d", inputs_sent, outputs_received);
+            test_passed = 0;
+        end else $display("Handshake PASS: All %d inputs processed", inputs_sent);
+
+        // Correctness: negate=1 for u>0.5, x<=0.5
+        if (valid_out && ((u > HALF && !negate) || x > HALF)) begin
+            $display("Output FAIL: Incorrect negate=%b or x=%d for u=%d", negate, x, u);
+            test_passed = 0;
+        end else $display("Output PASS: negate=%b, x=%d", negate, x);
+
+        if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
+        if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
 endmodule
