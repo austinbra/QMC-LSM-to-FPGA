@@ -1,111 +1,96 @@
-# FPGA-Accelerated QMC + LSMC American Option Pricing Engine
+# FPGA QMC‑LSMC American Option Pricer
 
 ## Overview
+This project implements a **production‑grade, fully handshaked FPGA pipeline** for **American option pricing** using the **Longstaff–Schwartz Monte Carlo (LSMC)** method with **Quasi‑Monte Carlo (Sobol) sequences**.  
+The design targets a **Xilinx Spartan‑7 FPGA** (Vivado flow) and is written in **SystemVerilog**.  
 
-This project implements an American option pricer using the Least-Squares Monte Carlo (LSMC) approach with Quasi-Monte Carlo (QMC) Sobol sequences. The C++ prototype is fully quantized (fixed-point) to match later Verilog modules, enabling easy porting to FPGA platforms (Arty A7, PYNQ-Z2).
+In addition to the FPGA implementation, the repository includes **C++ baselines**:
+- A **floating‑point baseline** (using Boost libraries) for reference accuracy.  
+- A **fixed‑point baseline** to match the FPGA’s Qm.n arithmetic and validate numerical trade‑offs.  
 
-## Features
-
-* **Fixed-Point C++ Prototype**: Uses Q9.23 format (32-bit) for all core arithmetic (stock price, normals, regression), ensuring bit-exact behavior when moved to hardware.
-* **Sobol QMC Path Generation**: Leverages a Sobol generator for low-discrepancy sampling, mapped to standard normals via inverse-CDF and quantized to fixed-point.
-* **LSMC Backward Induction**: Performs cross-sectional regression at each exercise date using a 3×3 fixed-point solver; compares immediate payoff vs. continuation.
-* **Quantized Arithmetic Primitives**: Includes `fxMul`, `fxDiv`, `fxExp` (piecewise or LUT-based) for integer-only operations.
-* **Verilog-Ready Modules**: Integer-based multipliers, adders, and shift operations mirror final FPGA pipelined datapath.
-
-## Directory Structure
-
-```
-/ (root)
-├── README.md               # This documentation
-├── src/
-│   ├── main.cpp            # Entry point, quantized LSMC workflow
-│   ├── types.h             # Fixed-point typedefs and conversion helpers
-│   ├── sobol_wrapper.h     # Sobol QMC interface (double → quantize)
-│   ├── sobol_wrapper.cpp
-│   ├── linalg.h            # Fixed-point 3×3 regression solver interface
-│   ├── linalg.cpp          # Fixed-point Gaussian elimination
-│   ├── pricing.h           # Pricing logic (simulate & backtrack)
-│   ├── pricing.cpp
-│   ├── utils.h             # Timer, argument parsing, fixed ↔ double
-│   └── utils.cpp
-├── verilog/                # Verilog modules for FPGA (Sobol, exp, reg-solver)
-│   ├── sobol.v
-│   ├── exp_approx.v
-│   ├── regress3x3.v
-│   └── top_pipeline.v      # Integration and control FSM
-├── scripts/
-│   ├── build.sh            # Compile C++ and run tests
-│   └── sim.sh              # Launch Verilator simulation and compare to C++
-└── docs/
-    ├── FPGA_Integration.pdf # Timing/resource summary
-    └── demo_results.csv     # Benchmark data (paths/sec, error)
-```
-
-## Requirements
-
-* **C++17** compiler (e.g. g++ or clang++)
-* **Boost.Math** (for `erf_inv`) or a local `erfinv` implementation
-* **Verilator** (for Verilog simulation)
-* **Vivado** (for synthesis on Arty A7 or PYNQ-Z2)
-* **Make** or **CMake** for build scripts
-
-## Building & Running C++ Prototype
-
-```bash
-# From project root:
-cd src
-bash ../scripts/build.sh
-./lsmc_qmc --paths 100000 --steps 64 --S0 100.0 --K 100.0 --r 0.05 --sigma 0.2 --T 1.0
-```
-
-* `--paths N` : number of Monte Carlo paths (e.g. 100000)
-* `--steps M` : number of time-steps/exercise dates (e.g. 64)
-* `--S0`, `--K`, `--r`, `--sigma`, `--T`: option parameters
-
-Example output:
-
-```
-Params: N=100000, M=64, S0=100, K=100, r=0.05, sigma=0.2, T=1
-Simulation time:     0.45 s
-Backward time:       1.20 s
-Fixed-point price:   5.67
-```
-
-## Verilog Simulation & FPGA Synthesis
-
-1. **Simulate Verilog modules** with Verilator:
-
-   ```bash
-   cd verilog
-   bash ../scripts/sim.sh  # runs sobol, exp, regression testbenches
-   ```
-2. **Synthesize & Implement** on Arty A7 / PYNQ-Z2:
-
-   ```bash
-   vivado -mode batch -source synth.tcl  # reads Vivado project files
-   ```
-3. **Resource & Timing Reports** available in `docs/FPGA_Integration.pdf`.
-
-## FPGA Integration Flow
-
-1. **Sobol QMC Module** (`sobol.v`): produces 32-bit Sobol integer each cycle.
-2. **Inverse-CDF Module** (`exp_approx.v`): LUT-based `fxExp`, `fxInvErf`, etc.
-3. **GBM Pipeline**: fixed-point multiply, exp, multiply previous S to get new S.
-4. **Path Storage**: on-chip BRAM for `M` steps per path.
-5. **Backward FSM & Regression** (`regress3x3.v`): accumulators → 3×3 matrix solver.
-6. **Control** (`top_pipeline.v`): sequences forward simulation, BRAM writes, backward pass, PV accumulation.
-
-## Benchmark & Results
-
-* **CPU (C++ reference)**: 64‑step LSMC, N=100k paths → 1.65 s, error \~0.3% vs. binomial.
-* **FPGA (Arty A7 @100 MHz)**: 8‑pipeline latency per stage, 64‑step → \~2000 cycles/path → 50k paths/s.
-* **Precision**: Q9.23 yields <0.1% pricing error compared to double‐precision.
-
-## Contribution & License
-
-* Contributions welcome: fork repository, submit pull requests.
-* Licensed under MIT. See [LICENSE](LICENSE).
+This allows direct comparison of **accuracy** and **performance** between CPU and FPGA implementations.
 
 ---
 
-*For questions or demos, contact \[[your-email@example.com](mailto:your-email@example.com)]*
+## Features
+- **End‑to‑end pipeline**:  
+  Sobol → Inverse CDF (Zelen–Severo rational approx) → GBM path simulation → Accumulator → Regression (Gaussian elimination) → LSM decision → UART output.
+- **Fixed‑point math** (default Q16.16) with LUT‑based exp/ln/sqrt and Newton–Raphson refinement.
+- **Fully handshaked ready/valid interfaces** with skid buffers and barrier synchronization for stall safety.
+- **Mini‑batch accumulation**: accumulate regression sums across batches, run regression once, then sweep for path payoffs.
+- **Lane replication ready**: top‑level parameter to scale throughput by instantiating multiple parallel pipelines.
+- **Assertions** for handshake invariants and stall stability.
+- **C++ baselines** (floating‑point and fixed‑point) for validation and performance comparison.
+
+---
+
+## Architecture
+- **Sobol generator**: Gray‑coded XOR tree with BRAM‑stored direction numbers.  
+- **Inverse CDF**:  
+  - Step1: Fold U(0,1) to (0,0.5] with negate flag.  
+  - ln LUT + multiply by −2 + sqrt → t.  
+  - Zelen–Severo rational polynomial → z‑score.  
+- **GBM step**: Computes  
+![equation](https://latex.codecogs.com/svg.latex?\dpi{120}\bg{transparent}\color{white}S_{t+1}=S_t\cdot\exp\big((r-0.5\sigma^2)\Delta%20t+\sigma\sqrt{\Delta%20t}\,z\big))
+
+- **Accumulator**: Collects sufficient statistics for quadratic regression basis [1, S, S²] using 64‑bit accumulators.  
+- **Regression**: Deeply pipelined Gaussian elimination with pivoting; fallback to mean payoff if singular.  
+- **LSM decision**: Chooses between immediate exercise payoff and discounted continuation value.  
+- **UART interface**: Streams results to host for comparison with C++ baselines.
+
+---
+
+## Baselines (C++)
+- **Floating‑point baseline**:  
+  - Uses Boost libraries for Sobol sequence generation and inverse CDF.  
+  - Provides high‑accuracy reference results.  
+- **Fixed‑point baseline**:  
+  - Implements the same Qm.n arithmetic as the FPGA.  
+  - Validates numerical approximations and error bounds.  
+- Both baselines are included in the repository and can be run on CPU for **accuracy checks** and **timing comparisons**.  
+
+---
+
+## Build & Run
+### FPGA (Vivado)
+1. Add all SystemVerilog sources and memory initialization files (`*.mem`) to a Vivado project.  
+2. Generate the `fxDiv_core` IP (Xilinx `div_gen`) with parameters matching `fxDiv.sv`.  
+3. Add a clock constraint (e.g., 100 MHz).  
+4. Run behavioral simulation with provided testbenches.  
+5. Synthesize and implement for Spartan‑7.  
+
+### C++ Baselines
+1. Build with a modern C++ compiler (C++17 or later).  
+2. Floating‑point baseline requires Boost (for Sobol and statistical functions).  
+3. Run with the same option parameters as the FPGA to compare results.  
+
+---
+
+## Testing
+- **Unit testbenches** for Sobol, inverse CDF, GBM, accumulator, and regression.  
+- **Assertions** check handshake invariants and stall stability.  
+- **C++ vs FPGA comparison**:  
+  - Run both baselines and FPGA simulation with the same seeds/parameters.  
+  - Compare option prices and timing.  
+  - Expect <1% relative error (well within Monte Carlo variance).  
+
+---
+
+## Roadmap
+- [x] Fixed‑point math library (fxMul, fxDiv, fxExpLUT, fxlnLUT, fxSqrt).  
+- [x] Sobol generator.  
+- [x] Inverse CDF (Step1 + Zelen–Severo).  
+- [x] GBM step.  
+- [x] Accumulator + Regression.  
+- [x] LSM decision.  
+- [x] C++ floating‑point baseline.  
+- [x] C++ fixed‑point baseline.  
+- [x] Top‑level integration with UART.  
+- [ ] Lane replication (NUM_LANES > 4).  
+- [x] Python host script for real‑time data fetch and FPGA/CPU timing comparison.  
+
+
+---
+
+## Contact
+For questions or contributions, please open an issue or pull request.  
