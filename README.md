@@ -88,7 +88,7 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 - [x] Top‑level integration with UART.  
 - [ ] Lane replication (NUM_LANES > 4).  
 - [x] Python host script for real‑time data fetch and FPGA/CPU timing comparison.  
-
+:warning: Currently working on implementing some new features, so not everything works. 
 
 ---
 
