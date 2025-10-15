@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+timeunit 1ns; timeprecision 1ps;
 //-----------------------------------------------------------
 // Approximates Z score using Zelen & Severo rational polynomial
 //-----------------------------------------------------------
@@ -37,10 +37,12 @@ module fxInvCDF_ZS #(
     localparam signed [WIDTH-1:0] ONE = 1 <<< QFRAC;
 
 
-    logic [WIDTH-1:0] mul_t3_ready, mul_t2_ready, mul_c1t_ready, mul_c2t2_ready, mul_d1t_ready, mul_d2t2_ready, mul_d3t3_ready, div_nd_ready;
+    logic mul_t3_ready, mul_t2_ready, mul_c1t_ready, mul_c2t2_ready, mul_d1t_ready, mul_d2t2_ready, mul_d3t3_ready, div_nd_ready;
     logic barrier_ready;
 
-    assign barrier_ready = mul_t2_ready && mul_c1t_ready && mul_c2t2_ready && mul_d1t_ready && mul_d2t2_ready && mul_d3t3_ready && div_nd_ready;
+    assign barrier_ready = (mul_t2_ready && mul_c1t_ready && mul_c2t2_ready &&
+                        mul_d1t_ready && mul_d2t2_ready && mul_d3t3_ready &&
+                        div_nd_ready);
     
     
 //skid buffer
@@ -67,7 +69,7 @@ module fxInvCDF_ZS #(
 
     assign t_eff = buf_valid ? skid_t : t;
     assign negate_eff = buf_valid ? buf_negate : negate;
-    assign v0 = (buf_valid || valid_in) && barrier_ready;
+    assign v0 = (buf_valid || valid_in) && ready_out;
 
 // Multipliers
     logic v1a, v1b;       // valid_out of stage 1

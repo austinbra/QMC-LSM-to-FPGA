@@ -2,11 +2,11 @@
 //  fxDiv.sv - generic Qm.n fixed-point divider wrapper for Xilinx div_gen v5.1
 //             * 1 clk/quotient   * manual LATENCY cycles   * blocking flow
 //             * Dividend is NUM  << QFRAC (kept WIDTH+QFRAC bits)
-//             * Safe divide-by-zero bypass (returns 0)
+//             * Safe divide-by-zero bypass (returns numerator)
 //             * Parameters identical to fxMul for drop-in symmetry
 // ============================================================================
 
-`timescale 1ns/1ps
+timeunit 1ns; timeprecision 1ps;
 module fxDiv #(
     parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH ,
     parameter int QINT     = fpga_cfg_pkg::FP_QINT  ,   // not used internally
@@ -49,13 +49,14 @@ module fxDiv #(
     // 2.  Prepare operands
     //-------------------------------------------------------------------------
     localparam int DIVIDEND_W = WIDTH + QFRAC;   // 32 + 16  →  48
+    localparam signed [WIDTH-1:0] ONE_Q = (1 <<< QFRAC);
 
     logic signed [DIVIDEND_W-1:0] dividend;
     assign dividend = $signed(numerator) <<< QFRAC;
 
+
     logic signed [WIDTH-1:0] safe_den;
-    assign safe_den = (denominator == 0) ? {$signed(1'b1), {QFRAC{1'b0}}}  // 1.0 in Q format
-                                          : denominator;
+    assign safe_den = (denominator == 0) ? ONE_Q : denominator;
 
 
     //-------------------------------------------------------------------------
@@ -85,7 +86,7 @@ module fxDiv #(
     //-------------------------------------------------------------------------
     // 4.  Handshake glue + output selection
     //-------------------------------------------------------------------------
-    assign ready_out = core_div_rdy & core_dvd_rdy;
+    assign ready_out = core_div_rdy && core_dvd_rdy;
     assign valid_out = core_tvalid;
     assign result    = core_dout[DIVIDEND_W-1:QFRAC];   // 47:16 for default build
 
@@ -95,8 +96,16 @@ module fxDiv #(
     //-------------------------------------------------------------------------
     // If the result isn't accepted, ready_out must de-assert within 1 cycle
     // (otherwise we would overwrite the core).
-    property p_bp;  @(posedge clk) disable iff(!rst_n)
-        core_tvalid && !ready_in |-> ##1 !ready_out;  endproperty
-    assert property(p_bp);
+    logic core_bp_prev;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            core_bp_prev <= 1'b0;
+        end else begin
+            core_bp_prev <= (core_tvalid && !ready_in);
+            if (core_bp_prev)
+            assert (!ready_out)
+                else $error("fxDiv: back-pressure lost - pipeline overwrite");
+        end
+    end
 
 endmodule

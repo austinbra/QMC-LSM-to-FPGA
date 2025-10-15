@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+timeunit 1ns; timeprecision 1ps;
 // Convert sobol sequence number to x ∈ (0,0.5]
 module inverseCDF_step1 #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,

@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+timeunit 1ns; timeprecision 1ps;
 module fxlnLUT #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT      = fpga_cfg_pkg::FP_QINT,
@@ -74,6 +74,7 @@ module fxlnLUT #(
     initial begin
         assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result)) 
             else $error("LnLUT stall overwrite");
-        
+        assert property (QFRAC >= LUT_BITS) 
+            else $error("fxlnLUT: QFRAC < LUT_BITS");
     end
 endmodule

@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+timeunit 1ns; timeprecision 1ps;
 module sobol #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,   // 16, 32, 64...
     parameter int M         = 50,                       // total time-steps "dimensions"
@@ -17,25 +17,23 @@ module sobol #(
     output logic [WIDTH-1:0]             sobol_out,
 
     // expose the entire LUT for TB / debugging
-    output logic [WIDTH-1:0]         direction [0:M*WIDTH-1]
+    output wire [WIDTH-1:0]         direction [0:M*WIDTH-1]
 );
 
     // Direction-number memory :  M * WIDTH words
     (* ram_style = "block" *)
     logic [WIDTH-1:0]  direction [0:M*WIDTH-1];
     initial $readmemh("direction.mem", direction);
+    
 
-
-    logic [WIDTH-1:0] gray;
-    always_comb begin
-        gray = idx_in ^ (idx_in >>> 1); 
-    end
+    wire [WIDTH-1:0] gray;
+    assign gray = idx_in ^ (idx_in >> 1); 
     //one on/off shifts the new dot into the biggest available gap.
     //Because the reciprical is deterministic, the generator never stores the earlier points.
     //You just feed in the row index i and the formula dictates the new coordinate
 
 
-    logic [WIDTH-1:0] leaf [0:WIDTH-1];
+    wire [WIDTH-1:0] leaf [0:WIDTH-1];
     
     generate
         for (genvar k = 0; k < WIDTH; k = k + 1) begin
@@ -47,7 +45,7 @@ module sobol #(
     localparam int LEVELS = $clog2(WIDTH);
 
     // Stages; example: stage[l][i] holds XOR result at level l, element i
-    logic [WIDTH-1:0] stage [0:LEVELS][0:WIDTH-1];
+    wire [WIDTH-1:0] stage [0:LEVELS][0:WIDTH-1];
     generate
         for (genvar k = 0; k < WIDTH; k++)begin
             assign stage[0][k] = leaf[k];
@@ -61,7 +59,7 @@ module sobol #(
         end
     endgenerate
     
-    logic [WIDTH-1:0] sobol_raw;
+    wire [WIDTH-1:0] sobol_raw;
     assign sobol_raw = stage[LEVELS][0];
 
 
@@ -102,17 +100,37 @@ module sobol #(
     end
 
     // Assertions for verification
+    `ifndef SYNTHESIS
+    // WIDTH must be power of two
     initial begin
-        assert (WIDTH > 0 && (1 << $clog2(WIDTH)) == WIDTH) 
-            else $error("WIDTH must be a power of 2 in Sobol");
-
-        assert property (@(posedge clk) disable iff (!rst_n) 
-            valid_out && !ready_in |=> $stable(sobol_out)) 
-            else $error("Sobol: Stall overwrite - data loss");
-
-        assert property (@(posedge clk) disable iff (!rst_n) 
-            valid_in && !ready_out |=> $stable(idx_in) && $stable(dim_in)) 
-            else $error("Sobol: Input overwrite on backpressure");
+        assert (WIDTH > 0 && (1 << $clog2(WIDTH)) == WIDTH)
+            else $error("Sobol: WIDTH must be a power of 2");
     end
+
+    // Hold-checks only on sustained backpressure
+    logic out_bp, out_bp_prev, in_bp, in_bp_prev;
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            {out_bp_prev, out_bp} <= '0;
+            {in_bp_prev,  in_bp } <= '0;
+        end else begin
+            // output side
+            out_bp_prev <= out_bp;
+            out_bp      <= (valid_out && !ready_in);
+            if (out_bp_prev && out_bp)
+                assert ($stable(sobol_out))
+                    else $error("Sobol: Stall overwrite - data loss");
+
+            // input side
+            in_bp_prev  <= in_bp;
+            in_bp       <= (valid_in && !ready_out);
+            if (in_bp_prev && in_bp) begin
+                assert ($stable(idx_in)) else $error("Sobol: idx_in changed under backpressure");
+                assert ($stable(dim_in)) else $error("Sobol: dim_in changed under backpressure");
+            end
+        end
+    end
+    `endif
 
 endmodule

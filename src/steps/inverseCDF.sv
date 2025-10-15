@@ -1,5 +1,5 @@
 
-`timescale 1ns/1ps
+timeunit 1ns; timeprecision 1ps;
 module inverseCDF #(
     parameter int WIDTH              = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT               = fpga_cfg_pkg::FP_QINT,

@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+timeunit 1ns; timeprecision 1ps;
 //Streaming / one-per-path work -> fxMul (handshake)
 module fxMul #(
     parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH ,
@@ -49,9 +49,16 @@ module fxMul #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             v_pipe <= '0;
-        end
-        else if (shift_en) begin
-            v_pipe <= {v_pipe[LATENCY-2:0], (valid_in && ready_out)};
+            d_pipe[0] <= '0;
+        end else if (shift_en) begin
+            `ifdef SYNTHESIS
+                        // Synthesis-safe guard; tools constant-fold LATENCY
+            `endif  
+            if (LATENCY == 1) begin
+                v_pipe[0] <= valid_in && ready_out;
+            end else begin
+                v_pipe <= {v_pipe[LATENCY-2:0], valid_in && ready_out};
+            end
             d_pipe[0] <= prod_scaled;
         end
     end
@@ -71,11 +78,19 @@ module fxMul #(
     assign ready_out = !v_pipe[0] || shift_en;
     assign result = d_pipe[LATENCY-1];
 
-    initial begin
-    // Assertions – catch lost back-pressure during sim
-        assert property (@(posedge clk) disable iff(!rst_n) valid_out && !ready_in |-> ##1 ~ready_out)
-            else $error("fxMul: back-pressure lost - pipeline overwrite");
-        
+    logic bp_prev;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            bp_prev <= 1'b0;
+        end else begin
+            // remember backpressure condition this cycle
+            bp_prev <= (valid_out && !ready_in);
+
+            // if we had backpressure last cycle, ready_out must be 0 now
+            if (bp_prev)
+            assert (!ready_out)
+                else $error("fxMul: back-pressure lost - pipeline overwrite");
+        end
     end
 
 endmodule
