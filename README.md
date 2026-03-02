@@ -14,17 +14,20 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 
 ## Validation And Status
 - Validation log: `VALIDATION.md` (commands run, results, known gaps).
-- Active implementation tracker: `whats_next.txt`.
-- Current state: compile/elaboration checks are passing, but full top-level pricing datapath integration is still in progress.
+- Active implementation tracker: `whats_next.md`.
+- Current state: Pipeline stages (Sobol, InverseCDF, GBM, Accumulator, Regression, LSM Decision) are implemented with ready/valid + skid buffers. Top-level two-pass integration compiles/elaborates clean but has known bugs being fixed. Streaming overlap (Phase 4) is the next critical milestone.
 
 ---
 
 ## Features
-- **End‑to‑end pipeline**:  
-  Sobol → Inverse CDF (Zelen–Severo rational approx) → GBM path simulation → Accumulator → Regression (Gaussian elimination) → LSM decision → UART output.
+- **Fully pipelined streaming datapath** with skid buffers at every stage boundary:  
+  Sobol → Inverse CDF (Zelen–Severo rational approx) → GBM path simulation → Accumulator → Regression (Gaussian elimination) → LSM decision → UART output.  
+  Multiple samples in-flight simultaneously; backpressure propagates through ready/valid handshaking without data loss.
 - **Fixed‑point math** (default Q16.16) with LUT‑based exp/ln/sqrt and Newton–Raphson refinement.
-- **Fully handshaked ready/valid interfaces** with skid buffers and barrier synchronization for stall safety.
-- **Mini‑batch accumulation**: accumulate regression sums across batches, run regression once, then sweep for path payoffs.
+- **Two running modes** (host-side via `src/uart_host.py`):
+  - **Benchmark**: CPU vs FPGA side-by-side with identical parameters; reports price, cycles, wall time, speedup.
+  - **Live**: Fetches real market data from Yahoo Finance, derives S0/sigma, runs pricing with live parameters.
+- **O(1) memory via streaming accumulation**: No path storage required. Running 64‑bit sufficient statistics (8 sums) replace O(N×M) BRAM. Paths are regenerated deterministically (Sobol) for the decision pass — 2× compute, but constant memory regardless of N.
 - **Lane replication ready**: top‑level parameter to scale throughput by instantiating multiple parallel pipelines.
 - **Assertions** for handshake invariants and stall stability.
 - **Fixed‑point C++ baseline** for validation and performance comparison.
@@ -32,18 +35,22 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 ---
 
 ## Architecture
-- **Sobol generator**: Gray‑coded XOR tree with BRAM‑stored direction numbers.  
-- **Inverse CDF**:  
-  - Step1: Fold U(0,1) to (0,0.5] with negate flag.  
+
+The design is a **fully pipelined, streaming datapath** with ready/valid handshaking and skid buffers at every stage boundary. The top-level orchestrates two passes (training + decision) while the pipeline stages process data in parallel with overlapping execution.
+
+- **Sobol generator**: Gray‑coded XOR tree with BRAM‑stored direction numbers. Skid-buffered output.
+- **Inverse CDF** (~15 cycles):  
+  - Fold U(0,1) to (0,0.5] with negate flag (event-alignment FIFO for negate).
   - ln LUT + multiply by −2 + sqrt → t.  
   - Zelen–Severo rational polynomial → z‑score.  
-- **GBM step**: Computes  
-![equation](https://latex.codecogs.com/svg.latex?\dpi{120}\bg{transparent}\color{white}S_{t+1}=S_t\cdot\exp\big((r-0.5\sigma^2)\Delta%20t+\sigma\sqrt{\Delta%20t}\,z\big))
-
-- **Accumulator**: Collects sufficient statistics for quadratic regression basis [1, S, S²] using 64‑bit accumulators.  
+- **GBM step** (~5 cycles, streaming pipeline with input skid buffer):  
+  MUL1(vol_sqrt_dt × z) → ADD + saturate → EXP(signed LUT) → MUL2(S × exp).  
+  Pre-computed constants (`drift_const`, `vol_sqrt_dt`) eliminate per-sample sqrt/mul overhead.
+- **Accumulator** (O(1) memory, no path storage):  
+  Collects 8 running sufficient statistics [Σ1, ΣS, ΣS², ΣS³, ΣS⁴, Σy, ΣSy, ΣS²y] in 64‑bit registers. Paths are consumed and reduced immediately — no N‑sized buffer exists anywhere. This is what makes the design feasible on a memory‑constrained Spartan‑7.
 - **Regression**: Deeply pipelined Gaussian elimination with pivoting; fallback to mean payoff if singular.  
 - **LSM decision**: Chooses between immediate exercise payoff and discounted continuation value.  
-- **UART interface**: Streams results to host for comparison with C++ baselines.
+- **UART interface**: Streams results to host. Result packet: marker `0xABCD0001` + price + cycle count (lo/hi).
 
 ---
 
@@ -56,6 +63,22 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 
 ## Build & Run
 ### FPGA (Vivado)
+
+**Prerequisite:** Run from a shell where Vivado is in PATH (e.g. "Vivado 2023.x Command Prompt" or after sourcing `settings64.bat` / `settings64.sh`).
+
+**Quick compile/simulate (recommended):**
+```powershell
+./run_xvlog_src.ps1          # Compile (uses vivado -mode batch by default)
+./run_xelab_smoke.ps1       # Elaborate
+./run_tb_top_uart_safe.ps1  # Simulate (timeout mode)
+./run_tb_top_uart_safe.ps1 -ComputeMode  # Simulate (compute mode)
+```
+
+If scripts time out, ensure Vivado is in PATH. Alternatively run directly:
+```bash
+vivado -mode batch -source scripts/run_xvlog.tcl
+```
+
 1. Add all SystemVerilog sources and memory initialization files (`*.mem`) to a Vivado project.  
 2. Generate the `fxDiv_core` IP (Xilinx `div_gen`) with parameters matching `fxDiv.sv`.  
 3. Add a clock constraint (e.g., 100 MHz).  
@@ -68,20 +91,19 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 3. For speed comparison, measure FPGA core cycles (exclude UART transfer time) and compare against baseline runtime.  
 4. You can drive CPU/FPGA run modes from `src/uart_host.py` using `--mode benchmark|live` and `--target cpu|fpga|both`.  
 
-### Current benchmark payload note
-- The host script can decode an FPGA result payload marker (`0xABCD0001`) with `(price_raw, cycles_lo, cycles_hi)`.
-- Placeholder result emission is disabled by default in `top_mc_option_pricer` to avoid misleading metrics.
-- Connect real compute done/price signals in top-level integration to enable meaningful benchmark payloads.
+### Running modes
 
-### Next implementation steps (priority)
-1. Integrate full pricing datapath in `src/top/top_option_pricer.sv` and wire real `result_price`.
-2. Connect true pipeline-completion pulse to top-level `core_done` cycle-stop point.
-3. Verify FPGA UART returns real `(marker, price, cycles_lo, cycles_hi)` packet.
-4. Run benchmark mode with `src/uart_host.py` and report:
-   - CPU runtime
-   - FPGA core cycles and derived compute time (`--fpga-fclk-hz`)
-   - price delta and speedup
-5. Add live market mode verification (`--mode live --target cpu|fpga`) with logged input snapshot for repeatability.
+Two host-side modes are supported via `src/uart_host.py`:
+
+| Mode | Command | Purpose |
+|------|---------|---------|
+| **Benchmark** | `python src/uart_host.py --mode benchmark --target both --param-file baseline/cpp_fixed/params_example.txt` | Run CPU baseline and FPGA with identical params. Compare price, FPGA core cycles vs CPU wall time, speedup. UART I/O excluded from FPGA timing. |
+| **Live** | `python src/uart_host.py --mode live --target fpga` | Fetch real market data from Yahoo Finance, derive S0 and sigma, run pricing. Logs input snapshot. |
+
+### Current status
+- Top-level two-pass LSMC engine compiles and elaborates clean.
+- Three critical bugs fixed (sub_phase overflow, GBM S pipeline misalignment, InvCDF C0 constant). See `whats_next.md` for details.
+- Next critical milestone: Phase 4 — convert serialized FSM to fully pipelined streaming control for real throughput advantage.
 
 ---
 
@@ -96,18 +118,24 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 ---
 
 ## Roadmap
-- [x] Fixed‑point math library (fxMul, fxDiv, fxExpLUT, fxlnLUT, fxSqrt).  
-- [x] Sobol generator.  
-- [x] Inverse CDF (Step1 + Zelen–Severo).  
-- [x] GBM step.  
-- [x] Accumulator + Regression.  
-- [x] LSM decision.  
-- [x] C++ floating‑point baseline.  
-- [x] C++ fixed‑point baseline.  
-- [x] Top‑level integration with UART.  
-- [ ] Lane replication (NUM_LANES > 4).  
-- [x] Python host script for real‑time data fetch and FPGA/CPU timing comparison.  
-:warning: Currently working on implementing some new features, so not everything works. 
+- [x] Fixed‑point math library (fxMul, fxDiv, fxExpLUT, fxLnLUT, fxSqrt) with skid buffers.
+- [x] Sobol generator (Gray-coded XOR tree, skid-buffered output).
+- [x] Inverse CDF (fold + Zelen–Severo, event-alignment FIFO for negate flag).
+- [x] GBM streaming pipeline (MUL→EXP→MUL, input skid buffer, pre-computed constants).
+- [x] Accumulator + Regression (64-bit sums, Gaussian elimination, fallback).
+- [x] LSM decision (exercise vs continuation comparison).
+- [x] C++ fixed‑point baseline (Q16.16, aligned with FPGA arithmetic).
+- [x] Top‑level two-pass LSMC integration with UART I/O.
+- [ ] **Phase 4: Fully pipelined top-level** — streaming overlap, not serialized FSM. **(next critical milestone)**
+- [ ] Two running modes: benchmark (CPU vs FPGA comparison) + live (Yahoo Finance data).
+- [ ] PUT/CALL runtime flag (trivial: swap payoff direction, ~10 lines of RTL).
+- [ ] Richer error reporting in result packet (timeout, singular regression, saturation flags).
+- [ ] Numerical validation against C++ baseline across parameter sweeps.
+- [ ] Antithetic variates (run z and −z per Sobol point, halves variance for free).
+- [ ] Lane replication (NUM_LANES > 1) for throughput scaling.
+- [ ] Multi-exercise-date expansion (full backward induction).
+
+> :warning: Active development — P0 bugs fixed, Phase 4 (fully pipelined top-level) is next. See `whats_next.md` for full status.
 
 ---
 

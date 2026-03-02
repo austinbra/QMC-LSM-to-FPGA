@@ -1,9 +1,11 @@
 timeunit 1ns; timeprecision 1ps;
+// GBM step: S_next = S * exp( drift_const + vol_sqrt_dt*z )
+// Streaming pipeline: MUL1(diff) -> ADD+EXP -> MUL2(S*exp). ~6 cycle latency.
+// Pre-computed: drift_const, vol_sqrt_dt. Uses signed ExpLUT (no fxDiv).
 module GBM #(
     parameter int WIDTH       = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT        = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC       = fpga_cfg_pkg::FP_QFRAC,
-    parameter int DIV_LATENCY = fpga_cfg_pkg::FP_DIV_LATENCY,
     parameter int LANE_ID     = 0
 )(
     input  logic                       clk,
@@ -16,221 +18,155 @@ module GBM #(
 
     input  logic signed [WIDTH-1:0]    z,
     input  logic signed [WIDTH-1:0]    S,
-    input  logic signed [WIDTH-1:0]    r,
-    input  logic signed [WIDTH-1:0]    sigma,
-    input  logic signed [WIDTH-1:0]    dt,
+    input  logic signed [WIDTH-1:0]    drift_const,
+    input  logic signed [WIDTH-1:0]    vol_sqrt_dt,
     output logic signed [WIDTH-1:0]    S_next
 );
-    localparam signed [WIDTH-1:0] ONE     = 1 << QFRAC;
     localparam signed [WIDTH-1:0] MAX_POS = {1'b0, {(WIDTH-1){1'b1}}};
     localparam signed [WIDTH-1:0] MIN_NEG = {1'b1, {(WIDTH-1){1'b0}}};
 
-    // ----------------------------------------------------------------------
-    // 0. One-deep skid buffer
-    // ----------------------------------------------------------------------
-    typedef struct packed {
-        logic signed [WIDTH-1:0] z;
-        logic signed [WIDTH-1:0] S;
-        logic signed [WIDTH-1:0] r;
-        logic signed [WIDTH-1:0] sigma;
-        logic signed [WIDTH-1:0] dt;
-    } sample_t;
+    // -------------------------------------------------------------------------
+    // Inter-stage handshake signals (declared first to avoid forward references)
+    // -------------------------------------------------------------------------
+    logic                    mul1_vin, mul1_vout, mul1_rin, mul1_rout;
+    logic signed [WIDTH-1:0] mul1_result;
+    logic                    mul1_accept;
 
-    sample_t in_buf;
-    logic buf_valid;
+    logic                    exp_vin, exp_vout, exp_rin, exp_rout;
+    logic signed [WIDTH-1:0] exp_arg, exp_result;
+    logic                    exp_accept;
 
-    logic mul_sigma2_ready, mul_drift_ready, sqrt_blk_ready, mul_sigma_sqrt_ready, mul_diffusion_ready, explut_ready, recip_ready, mul_price_ready;
-    logic drift_barrier;
-    logic diffusion_barrier;
-    logic exp_barrier;
-    logic shift_en;
+    logic                    mul2_vin, mul2_vout, mul2_rin, mul2_rout;
+    logic signed [WIDTH-1:0] mul2_result;
 
-    assign drift_barrier     = mul_sigma2_ready && mul_drift_ready;
-    assign diffusion_barrier = sqrt_blk_ready && mul_sigma_sqrt_ready && mul_diffusion_ready;
-    assign exp_barrier       = explut_ready && recip_ready;
-    assign ready_out = (!buf_valid || (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready));
-    assign shift_en  = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
+    // -------------------------------------------------------------------------
+    // Input skid buffer (decouple from inverseCDF backpressure)
+    // -------------------------------------------------------------------------
+    logic                    skid_valid;
+    logic signed [WIDTH-1:0] skid_z, skid_S;
+
+    logic                    pipe_valid;
+    logic signed [WIDTH-1:0] pipe_z, pipe_S;
+
+    logic pipe_can_push;
+    assign pipe_can_push = mul1_rout;
+
+    assign ready_out = !skid_valid || pipe_can_push;
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            buf_valid <= 0;
-            in_buf <= '{0, 0, 0, 0, 0};
+            skid_valid <= 1'b0;
+            skid_z     <= '0;
+            skid_S     <= '0;
         end else begin
-            if (valid_in && ready_out) begin
-                in_buf <= '{z, S, r, sigma, dt};
-                buf_valid <= 1;
-            end else if (shift_en) begin
-                buf_valid <= 0;
+            if (pipe_valid && pipe_can_push)
+                skid_valid <= 1'b0;
+            if (valid_in && ready_out && !pipe_can_push) begin
+                skid_valid <= 1'b1;
+                skid_z     <= z;
+                skid_S     <= S;
+            end else if (valid_in && ready_out && pipe_can_push && skid_valid) begin
+                skid_z <= z;
+                skid_S <= S;
             end
         end
     end
 
-    // ----------------------------------------------------------------------
-    // 1. DRIFT branch :  (r - 0.5*sigma^2) * dt
-    // ----------------------------------------------------------------------
-    logic drift_v_in;
-    assign drift_v_in = buf_valid && shift_en;
+    assign pipe_z     = skid_valid ? skid_z : z;
+    assign pipe_S     = skid_valid ? skid_S : S;
+    assign pipe_valid = skid_valid || valid_in;
 
-    logic drift_v_mid, drift_v_out;
-    logic join_ready;
-    logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
+    // -------------------------------------------------------------------------
+    // Stage 1: MUL1 = vol_sqrt_dt * z
+    // -------------------------------------------------------------------------
+    assign mul1_rin = exp_rout;
 
-    fxMul #(.LATENCY(2)) mul_sigma2 (
-        .clk       (clk),
-        .rst_n     (rst_n),
-        .valid_in  (drift_v_in),
-        .ready_out (mul_sigma2_ready),
-        .valid_out (drift_v_mid),
-        .ready_in  (mul_drift_ready),
-        .a         (in_buf.sigma),
-        .b         (in_buf.sigma),
-        .result    (sigma2)
-    );
-
-    assign half_sigma2 = sigma2 >>> 1;
-
-    fxMul #(.LATENCY(2)) mul_drift (
+    fxMul #(.LATENCY(fpga_cfg_pkg::FP_MUL_LATENCY)) u_mul1 (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (drift_v_mid),
-        .valid_out  (drift_v_out),
-        .ready_in   (join_ready),
-        .ready_out  (mul_drift_ready),
-        .a          (in_buf.r - half_sigma2),
-        .b          (in_buf.dt),
-        .result     (drift)
+        .valid_in (mul1_vin),
+        .ready_out(mul1_rout),
+        .valid_out(mul1_vout),
+        .ready_in (mul1_rin),
+        .a(vol_sqrt_dt),
+        .b(pipe_z),
+        .result(mul1_result)
     );
 
-    // ----------------------------------------------------------------------
-    // 2. DIFFUSION branch : sigma * sqrt(dt) * z
-    //    FIX: gate with shift_en to prevent double-fire
-    // ----------------------------------------------------------------------
-    logic diff_v_in;
-    assign diff_v_in = buf_valid && shift_en;
+    assign mul1_accept = pipe_valid && mul1_rout;
+    assign mul1_vin    = mul1_accept;
 
-    logic diff_v_mid1, diff_v_mid2, diff_v_out;
-    logic signed [WIDTH-1:0] sqrt_dt, sigma_sqrt_dt, diffusion;
-
-    fxSqrt #() sqrt_blk (
+    // S alignment FIFO: push on mul1_accept, pop on exp_vout && mul2_rout
+    logic [WIDTH-1:0] s_align_push [0:0];
+    logic [WIDTH-1:0] s_align_pop  [0:0];
+    logic              s_fifo_full, s_fifo_empty;
+    assign s_align_push[0] = pipe_S;
+    event_align_fifo_arr #(.N(1), .DW(WIDTH), .DEPTH(4)) u_s_align (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (diff_v_in),
-        .valid_out  (diff_v_mid1),
-        .ready_in   (mul_sigma_sqrt_ready),
-        .ready_out  (sqrt_blk_ready),
-        .a          (in_buf.dt),
-        .result     (sqrt_dt)
+        .push_en  (mul1_accept),
+        .pop_en   (exp_vout && mul2_rout),
+        .push_data(s_align_push),
+        .pop_data (s_align_pop),
+        .full     (s_fifo_full),
+        .empty    (s_fifo_empty)
     );
+    wire signed [WIDTH-1:0] s_aligned = $signed(s_align_pop[0]);
 
-    fxMul #(.LATENCY(2)) mul_sigma_sqrt (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in   (diff_v_mid1),
-        .valid_out  (diff_v_mid2),
-        .ready_in   (mul_diffusion_ready),
-        .ready_out  (mul_sigma_sqrt_ready),
-        .a          (sqrt_dt),
-        .b          (in_buf.sigma),
-        .result     (sigma_sqrt_dt)
-    );
-
-    fxMul #(.LATENCY(2)) mul_diffusion (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in   (diff_v_mid2),
-        .valid_out  (diff_v_out),
-        .ready_in   (join_ready),
-        .ready_out  (mul_diffusion_ready),
-        .a          (sigma_sqrt_dt),
-        .b          (in_buf.z),
-        .result     (diffusion)
-    );
-
-    // ----------------------------------------------------------------------
-    // 3. Join drift + diffusion
-    // ----------------------------------------------------------------------
-    (* preserve = 1 *) logic join_valid;
-    assign join_valid = drift_v_out && diff_v_out;
-    assign join_ready = join_valid && explut_ready;
-
-    // Saturate drift+diffusion to full signed range
-    logic signed [WIDTH-1:0] exp_arg;
-    logic                    exp_launch;
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            exp_arg    <= '0;
-            exp_launch <= 1'b0;
-        end else begin
-            exp_launch <= 1'b0;
-            if (join_valid && join_ready) begin
-                if (drift + diffusion > MAX_POS)
-                    exp_arg <= MAX_POS;
-                else if (drift + diffusion < MIN_NEG)
-                    exp_arg <= MIN_NEG;
-                else
-                    exp_arg <= drift + diffusion;
-                exp_launch <= 1'b1;
-            end
-        end
+    // -------------------------------------------------------------------------
+    // Stage 2: ADD (combo) + EXP input. exp_arg = drift_const + diff, saturate
+    // -------------------------------------------------------------------------
+    logic signed [WIDTH-1:0] sum_val;
+    always_comb begin
+        sum_val = drift_const + mul1_result;
+        if (sum_val > MAX_POS)      exp_arg = MAX_POS;
+        else if (sum_val < MIN_NEG)  exp_arg = MIN_NEG;
+        else                         exp_arg = sum_val;
     end
 
-    // ----------------------------------------------------------------------
-    // 4. e^(exp_arg) via LUT + reciprocal for negative arg
-    //    exp_arg is registered; sign_bit/abs_arg are stable from
-    //    exp_launch until the next join (barriers prevent overlap).
-    // ----------------------------------------------------------------------
-    logic signed [WIDTH-1:0] abs_arg;
-    logic sign_bit;
-
-    assign sign_bit = exp_arg[WIDTH-1];
-    assign abs_arg  = sign_bit ? -exp_arg : exp_arg;
-
-    logic exp_v, recip_v;
-    logic signed [WIDTH-1:0] e_pos, e_neg;
-
-    fxExpLUT #() explut (
+    fxExpLUT #(
+        .LUT_BITS(12),
+        .LUT_FILE("src/gen/exp_signed_lut_8192.mem"),
+        .SIGNED_RANGE(1)
+    ) u_exp (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (exp_launch),
-        .valid_out  (exp_v),
-        .ready_in   (recip_ready),
-        .ready_out  (explut_ready),
-        .a          (abs_arg),
-        .result     (e_pos)
+        .valid_in (exp_vin),
+        .ready_out(exp_rout),
+        .valid_out(exp_vout),
+        .ready_in (exp_rin),
+        .a(exp_arg),
+        .result(exp_result)
     );
 
-    fxDiv #() recip (
+    assign exp_accept = mul1_vout && exp_rout;
+    assign exp_vin    = exp_accept;
+
+    // -------------------------------------------------------------------------
+    // Stage 3: MUL2 = S * exp_val
+    // -------------------------------------------------------------------------
+    fxMul #(.LATENCY(fpga_cfg_pkg::FP_MUL_LATENCY)) u_mul2 (
         .clk(clk), .rst_n(rst_n),
-        .valid_in       (exp_v),
-        .valid_out      (recip_v),
-        .ready_in       (mul_price_ready),
-        .ready_out      (recip_ready),
-        .numerator      (ONE),
-        .denominator    (e_pos),
-        .result         (e_neg)
+        .valid_in (mul2_vin),
+        .ready_out(mul2_rout),
+        .valid_out(mul2_vout),
+        .ready_in (mul2_rin),
+        .a(s_aligned),
+        .b(exp_result),
+        .result(mul2_result)
     );
 
-    logic signed [WIDTH-1:0] e_final;
-    assign e_final = sign_bit ? e_neg : e_pos;
+    assign mul2_vin = exp_vout && mul2_rout;
+    assign mul2_rin = ready_in;
 
-    // ----------------------------------------------------------------------
-    // 5. Final price  S_next = S * e^(drift+diffusion)
-    // ----------------------------------------------------------------------
-    fxMul #(.LATENCY(2)) mul_price (
-        .clk(clk), .rst_n(rst_n),
-        .valid_in   (recip_v),
-        .valid_out  (valid_out),
-        .ready_in   (ready_in),
-        .ready_out  (mul_price_ready),
-        .a          (e_final),
-        .b          (in_buf.S),
-        .result     (S_next)
-    );
+    // Output
+    assign valid_out = mul2_vout;
+    assign S_next    = mul2_result;
+
+    // Backpressure chain
+    assign exp_rin = mul2_rout || !exp_vout;
 
 `ifdef ASSERT_STRICT
-    assert property (@(posedge clk) sigma2 >= 0)
-        else $error("Negative sigma2 in GBM");
-
     assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next))
         else $error("GBM: Backpressure violation");
-
-    assert property (@(posedge clk) disable iff (!rst_n) (drift_v_out != diff_v_out) |-> ##1 !join_valid)
-        else $error("GBM: Lagging branch");
+    assert property (@(posedge clk) disable iff (!rst_n) !(s_fifo_full && mul1_accept))
+        else $error("GBM: S alignment FIFO overflow");
 `endif
 endmodule

@@ -121,8 +121,6 @@ module fxSqrt #(
     // Mul2: a * r0^2
     logic signed [WIDTH-1:0] mul2_result;
     logic mul3_ready, mul4_ready;
-    logic mul_barrier_ready;
-    assign mul_barrier_ready = mul3_ready && mul4_ready;
 
     fxMul #(.LATENCY(2)) mul2 (
         .clk       (clk),
@@ -168,7 +166,7 @@ module fxSqrt #(
         .valid_in  (v2),
         .ready_out (mul3_ready),
         .valid_out (v3),
-        .ready_in  (mul_barrier_ready),
+        .ready_in  (mul4_ready),
         .a         (r0_hold_2),
         .b         (term),
         .result    (mul3_result)

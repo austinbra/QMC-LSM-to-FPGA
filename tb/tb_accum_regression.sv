@@ -31,15 +31,16 @@ module tb_accum_regression;
     .QFRAC     (QFRAC),
     .N_SAMPLES (N_S)
   ) dut (
-    .clk       (clk),
-    .rst_n     (rst_n),
-    .valid_in  (valid_in),
-    .ready_out (ready_out),
-    .valid_out (valid_out),
-    .ready_in  (ready_in),
-    .x_in      (x_in),
-    .y_in      (y_in),
-    .beta      (beta)
+    .clk            (clk),
+    .rst_n          (rst_n),
+    .valid_in       (valid_in),
+    .ready_out      (ready_out),
+    .valid_out      (valid_out),
+    .ready_in       (ready_in),
+    .x_in           (x_in),
+    .y_in           (y_in),
+    .n_samples_cfg  ('0),
+    .beta           (beta)
   );
 
   // -------------------------
@@ -212,14 +213,10 @@ module tb_accum_regression;
     #20 $finish;
   end
 
-  // -------------------------
-  // Console monitor (ACC + solver)
-  // -------------------------
+`ifdef TB_ACCUM_REG_DEBUG
   initial begin
-    $timeformat(-9, 3, " ns", 10); // ns with 3 decimal places
-
+    $timeformat(-9, 3, " ns", 10);
     $display("time      rst v_in r_out v_out r_in   cnt_launch cnt_done start_s solver_done acc_state   sol_vin sol_rin sol_rout sol_vout sing_err   x_in(hex)   y_in(hex)   beta0(hex)  beta1(hex)  beta2(hex)");
-
     forever begin
       @(posedge clk);
       $display("%t  %0d   %0d    %0d     %0d    %0d    %0d        %0d        %0d       %0d         %0d       %0d       %0d       %0d       %0d       %0d    %08h   %08h   %08h   %08h   %08h",
@@ -233,6 +230,7 @@ module tb_accum_regression;
                x_in, y_in, beta[0], beta[1], beta[2]);
     end
   end
+`endif
 
   initial begin
     repeat (MAX_TB_CYCLES) @(posedge clk);

@@ -1,10 +1,11 @@
 timeunit 1ns; timeprecision 1ps;
 module fxExpLUT #(
-    parameter int WIDTH    = fpga_cfg_pkg::FP_WIDTH,
-    parameter int QINT     = fpga_cfg_pkg::FP_QINT,
-    parameter int QFRAC    = fpga_cfg_pkg::FP_QFRAC,
-    parameter int LUT_BITS = 12,
-    parameter string LUT_FILE = "src/gen/exp_lut_4096.mem"
+    parameter int WIDTH       = fpga_cfg_pkg::FP_WIDTH,
+    parameter int QINT        = fpga_cfg_pkg::FP_QINT,
+    parameter int QFRAC       = fpga_cfg_pkg::FP_QFRAC,
+    parameter int LUT_BITS    = 12,
+    parameter string LUT_FILE = "src/gen/exp_lut_4096.mem",
+    parameter bit SIGNED_RANGE = 0   // 1: 8192 LUT, handles signed a (exp(a) for a in [-1,1])
 )(
     input  logic                      clk,
     input  logic                      rst_n,
@@ -15,30 +16,29 @@ module fxExpLUT #(
     output logic                      valid_out,
     input  logic                      ready_in,
 
-    // NOTE: expects a >= 0. For negative inputs, pass |a| and handle reciprocal outside.
     input  logic signed [WIDTH-1:0]   a,
     output logic signed [WIDTH-1:0]   result
 );
-    // Domain: exp(x) for x in [0, 8). Clamp outside range.
-    localparam signed [WIDTH-1:0] A_MIN = '0;
-    localparam signed [WIDTH-1:0] A_MAX = (8 <<< QFRAC) - 1;
+    localparam int HALF_LUT = (1 << LUT_BITS);
+    localparam int LUT_SIZE = SIGNED_RANGE ? (2 << LUT_BITS) : (1 << LUT_BITS);
+    // Domain: [0,1) for unsigned; [-1,1] for signed (low half exp(x), high half exp(-x))
+    localparam signed [WIDTH-1:0] A_MIN = SIGNED_RANGE ? -(1 <<< QFRAC) : '0;
+    localparam signed [WIDTH-1:0] A_MAX = (1 <<< QFRAC) - 1;
 
-    // Index mapping: idx = floor(a * 2^LUT_BITS / 8)
-    // With a in QFRAC, that is idx = a >> (QFRAC + 3 - LUT_BITS)
-    localparam int SHIFT = (QFRAC + 3) - LUT_BITS;
+    localparam int SHIFT = QFRAC - LUT_BITS;
 
     initial begin
         if (SHIFT < 0)
-            $fatal(1, "fxExpLUT: invalid SHIFT; QFRAC+3=%0d, LUT_BITS=%0d", QFRAC+3, LUT_BITS);
+            $fatal(1, "fxExpLUT: invalid SHIFT; QFRAC=%0d LUT_BITS=%0d", QFRAC, LUT_BITS);
     end
 
     (* rom_style = "block" *)
-    logic [WIDTH-1:0] lut [0:(1<<LUT_BITS)-1];
+    logic [WIDTH-1:0] lut [0:LUT_SIZE-1];
     initial $readmemh(LUT_FILE, lut);
 
     // Stage 1: clamp + register address
-    logic                  s1_valid;
-    logic [LUT_BITS-1:0]   s1_addr;
+    logic                            s1_valid;
+    logic [$clog2(LUT_SIZE)-1:0]     s1_addr;
 
     // Stage 2: LUT read + output
     logic                  v_reg;
@@ -49,15 +49,30 @@ module fxExpLUT #(
 
     assign ready_out = s1_can_drain;
 
-    // Combinational clamp for address computation
-    logic signed [WIDTH-1:0] a_clamped_c;
+    // Combinational clamp + address for signed or unsigned
+    logic signed [WIDTH-1:0]       a_clamped_c;
+    logic [$clog2(LUT_SIZE)-1:0]  addr_c;
     always_comb begin
-        if (a <= A_MIN)      a_clamped_c = A_MIN;
-        else if (a >= A_MAX) a_clamped_c = A_MAX;
-        else                 a_clamped_c = a;
+        a_clamped_c = a;
+        addr_c = '0;
+        if (SIGNED_RANGE) begin
+            if (a >= A_MAX)       a_clamped_c = A_MAX;
+            else if (a <= A_MIN)  a_clamped_c = A_MIN;
+            if (a < 0) begin
+                addr_c = HALF_LUT + ($unsigned(-a_clamped_c) >> SHIFT);
+                if (addr_c >= LUT_SIZE) addr_c = LUT_SIZE - 1;
+            end else begin
+                addr_c = $unsigned(a_clamped_c) >> SHIFT;
+                if (addr_c >= HALF_LUT) addr_c = HALF_LUT - 1;
+            end
+        end else begin
+            if (a <= A_MIN)      a_clamped_c = A_MIN;
+            else if (a >= A_MAX) a_clamped_c = A_MAX;
+            addr_c = ($unsigned(a_clamped_c) >> SHIFT);
+        end
     end
 
-    // Stage 1: register clamped address
+    // Stage 1: register address
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             s1_valid <= 1'b0;
@@ -68,7 +83,7 @@ module fxExpLUT #(
 
             if (valid_in && ready_out) begin
                 s1_valid <= 1'b1;
-                s1_addr  <= ($unsigned(a_clamped_c) >> SHIFT);
+                s1_addr  <= addr_c;
             end
         end
     end

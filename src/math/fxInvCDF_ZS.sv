@@ -26,7 +26,7 @@ module fxInvCDF_ZS #(
 );
 
     // Constants (Zelen & Severo rational approximation)
-    localparam signed [WIDTH-1:0] C0 = (2 <<< QFRAC) + ((515517 <<< (QFRAC - 20)) / 1000000);
+    localparam signed [WIDTH-1:0] C0 = (2515517 * (1 <<< QFRAC)) / 1000000;
     localparam signed [WIDTH-1:0] C1 = (802853 * (1 <<< QFRAC)) / 1000000;
     localparam signed [WIDTH-1:0] C2 = (10328 * (1 <<< QFRAC)) / 1000000;
 

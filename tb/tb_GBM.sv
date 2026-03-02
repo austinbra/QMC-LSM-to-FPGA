@@ -12,16 +12,16 @@ module tb_GBM;
     // Signals
     logic clk, rst_n;
     logic valid_in, ready_out, valid_out, ready_in;
-    logic signed [WIDTH-1:0] z, S, r, sigma, dt, S_next;
+    logic signed [WIDTH-1:0] z, S, drift_const, vol_sqrt_dt, S_next;
 
-    // DUT
+    // DUT (uses pre-computed drift_const, vol_sqrt_dt; streaming pipeline)
     GBM #(
-        .WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC), .DIV_LATENCY(DIV_LATENCY)
+        .WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC)
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .valid_in(valid_in), .ready_out(ready_out),
         .valid_out(valid_out), .ready_in(ready_in),
-        .z(z), .S(S), .r(r), .sigma(sigma), .dt(dt),
+        .z(z), .S(S), .drift_const(drift_const), .vol_sqrt_dt(vol_sqrt_dt),
         .S_next(S_next)
     );
 
@@ -36,32 +36,31 @@ module tb_GBM;
         rst_n = 0;
         valid_in = 0;
         ready_in = 1;
-        z = 0; S = 0; r = 0; sigma = 0; dt = 0;
+        z = 0; S = 0; drift_const = 0; vol_sqrt_dt = 0;
         #20 rst_n = 1;
         $display("Cycle %t: Reset deasserted", $time);
 
-        // 10 transactions with stalls
+        // 10 transactions with stalls (drift_const, vol_sqrt_dt are pre-computed GBM constants)
         for (int i = 0; i < 10; i++) begin
-                    @(posedge clk);
+            @(posedge clk);
             valid_in = $urandom % 2;
             z = $signed($urandom % (1 <<< 10)) - (1 <<< 9);  // +/- range
             S = $urandom % (1 <<< 10);  // Positive price
-            r = $urandom % (1 <<< 5);
-            sigma = $urandom % (1 <<< 5);
-            dt = $urandom % (1 <<< 5);
+            drift_const = $signed($urandom % (1 <<< 8)) - (1 <<< 7);  // small drift
+            vol_sqrt_dt = $urandom % (1 <<< 8);  // positive vol*sqrt(dt)
             ready_in = ($urandom % 10 > 2) ? 1 : 0;  // 30% stall
             if (valid_in && ready_out) $display("Cycle %t: Input accepted (ready_out=%b) - z=%d, S=%d", $time, ready_out, z, S);
-                    if (!ready_in) $display("Cycle %t: Stall simulated", $time);
-            if (i == 5) sigma = 0;
-    end
+            if (!ready_in) $display("Cycle %t: Stall simulated", $time);
+            if (i == 5) vol_sqrt_dt = 0;
+        end
 
-        // Edge: sigma=0 (no diffusion)
-        valid_in = 1; sigma = 0; #10;
-        if (valid_out) $display("Cycle %t: Output S_next=%d (expected close to S)", $time, S_next);
+        // Edge: vol_sqrt_dt=0 (no diffusion)
+        valid_in = 1; vol_sqrt_dt = 0; #10;
+        if (valid_out) $display("Cycle %t: Output S_next=%d (expected close to S*exp(drift))", $time, S_next);
 
         // Edge: Negative z (price decrease)
         z = - (1 <<< 8); #10;
-        valid_in = 1; #10;
+        valid_in = 1; vol_sqrt_dt = (1 << 6); #10;
 
         #200 $finish;
         end

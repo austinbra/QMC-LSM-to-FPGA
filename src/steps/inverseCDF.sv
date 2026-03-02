@@ -21,94 +21,75 @@ module inverseCDF #(
 
     localparam signed [WIDTH-1:0] NEG_TWO = -(2 << QFRAC);
 
-    // Skid buffer
-    logic buf_valid;
-    logic signed [WIDTH-1:0] buf_u_in;
+    // Serial pipeline: fold -> lnLUT -> mul -> sqrt -> rational.
+    // Each stage's ready_out feeds the previous stage's ready_in.
+    // No wide barrier needed: back-pressure propagates naturally.
 
-    logic step1_ready, loglut_ready, mul_neg2_ready, sqrt_unit_ready, rational_ready;
-    logic barrier_ready;
+    // Stage wires
+    logic v1, v2a, v2b, v3;
+    logic fold_ready, ln_ready, mul_ready, sqrt_ready, rational_ready;
 
-    assign barrier_ready = step1_ready && loglut_ready && mul_neg2_ready && sqrt_unit_ready && rational_ready;
-    assign ready_out = (!buf_valid || barrier_ready);
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            buf_valid <= 0;
-            buf_u_in  <= 0;
-        end else begin
-            if (valid_in && ready_out) begin
-                buf_u_in  <= u_in;
-                buf_valid <= 1;
-            end else if (buf_valid && barrier_ready && ready_in) begin
-                buf_valid <= 0;
-            end
-        end
-    end
-
-    // Step 1: fold U(0,1) into (0,0.5] + negate flag
     logic [WIDTH-1:0] x;
     logic negate;
-    logic v1;
+    logic [WIDTH-1:0] ln_x;
+    logic [WIDTH-1:0] neg2_ln_x;
+    logic [WIDTH-1:0] t_val;
 
+    // Upstream ready = fold stage can accept
+    assign ready_out = fold_ready;
+
+    // Step 1: fold U(0,1) into (0,0.5] + negate flag
     inverseCDF_fold #() fold_stage (
         .clk(clk),
         .rst_n(rst_n),
-        .valid_in(buf_valid),
+        .valid_in(valid_in),
         .valid_out(v1),
-        .ready_in(loglut_ready),
-        .ready_out(step1_ready),
-        .u(buf_u_in),
+        .ready_in(ln_ready),
+        .ready_out(fold_ready),
+        .u(u_in),
         .x(x),
         .negate(negate)
     );
 
-    // Step 2: sqrt(-2 * ln(x))
-    logic [WIDTH-1:0] ln_x;
-    logic v2a;
-
+    // Step 2a: ln(x) via LUT
     fxlnLUT #() loglut (
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(v1),
         .valid_out(v2a),
-        .ready_in(mul_neg2_ready),
-        .ready_out(loglut_ready),
+        .ready_in(mul_ready),
+        .ready_out(ln_ready),
         .a(x),
         .result(ln_x)
     );
 
-    logic [WIDTH-1:0] neg2_ln_x;
-    logic v2b;
-
+    // Step 2b: -2 * ln(x)
     fxMul #() mul_neg2(
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(v2a),
         .valid_out(v2b),
-        .ready_in(sqrt_unit_ready),
-        .ready_out(mul_neg2_ready),
+        .ready_in(sqrt_ready),
+        .ready_out(mul_ready),
         .a(ln_x),
         .b(NEG_TWO),
         .result(neg2_ln_x)
     );
 
-    logic [WIDTH-1:0] t_val;
-    logic v3;
-
+    // Step 2c: sqrt(-2*ln(x))
     fxSqrt #() sqrt_unit (
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(v2b),
         .valid_out(v3),
         .ready_in(rational_ready),
-        .ready_out(sqrt_unit_ready),
+        .ready_out(sqrt_ready),
         .a(neg2_ln_x),
         .result(t_val)
     );
 
     // Negate alignment FIFO: push on fold output, pop on sqrt output.
-    // This keeps the negate flag in sync with the data flowing through
-    // ln -> mul -> sqrt, regardless of per-stage stall behavior.
+    // Keeps the negate flag in sync with data flowing through ln -> mul -> sqrt.
     logic [0:0] neg_push [0:0];
     logic [0:0] neg_pop  [0:0];
     logic       neg_fifo_full, neg_fifo_empty;
@@ -129,7 +110,6 @@ module inverseCDF #(
     wire negate_aligned = neg_pop[0];
 
     // Step 3: Zelen & Severo rational approximation
-    // fxInvCDF_ZS captures t and negate internally (one-at-a-time processing)
     fxInvCDF_ZS #(.WIDTH(WIDTH), .QINT(QINT)) rational (
         .clk(clk),
         .rst_n(rst_n),

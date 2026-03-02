@@ -202,19 +202,33 @@ Three BRAM-backed LUT modules had the same systemic defect: a registered address
 
 ## Top-Level Integration (2026-03-01)
 
-### Architecture: two-pass QMC-LSMC pipeline
+### Architecture: two-pass QMC-LSMC pipeline (target: fully pipelined)
 
-Rewrote `top_option_pricer.sv` from a single-sample stub into a complete two-pass LSMC engine with an 11-state FSM.
+Rewrote `top_option_pricer.sv` from a single-sample stub into a complete two-pass LSMC engine. The current implementation uses an 11-state FSM that serializes samples (one sobol→inverseCDF→GBM at a time). **This is interim.** The architectural goal is a **fully pipelined, streaming top-level** where:
 
-**Pass 1 (Training):** For each of N paths, run M sequential GBM steps via `sobol -> inverseCDF -> GBM`, feeding `(S_exercise, disc * terminal_payoff)` into the accumulator. After N paths, accumulator triggers regression and outputs `beta[0:2]`.
+- Each pipeline stage (Sobol, InverseCDF, GBM) has skid buffers and ready/valid interfaces.
+- The top-level fires samples into the pipeline as fast as it can accept them, NOT one-at-a-time after end-to-end completion.
+- Multiple samples are in-flight simultaneously across pipeline stages.
+- Throughput is limited only by the slowest stage, not by total pipeline depth.
+
+**Pass 1 (Training):** For each of N paths, run M sequential GBM steps via the streaming pipeline `sobol -> inverseCDF -> GBM`, feeding `(S_exercise, disc * terminal_payoff)` into the accumulator. After N paths, accumulator triggers regression and outputs `beta[0:2]`.
 
 **Pass 2 (Decision):** Regenerate the same N paths (Sobol is deterministic from `idx_in`). For each path, `lsm_decision` compares immediate exercise payoff against the regression-estimated continuation, then selects the actual cashflow. The PV is discounted to t=0 via `disc_total` and accumulated. Final price = `sum_pv / N`.
 
 **Exercise date:** Step M-1 (one step before maturity). Single exercise date for this version.
 
-**Init phase:** Computes `dt = T / M`, `disc = exp(-r * dt)`, `disc_total = disc^(M-1)` using dedicated utility fxDiv/fxMul/fxExpLUT instances (time-shared, not on the critical path).
+**Init phase:** Computes `dt = T / M`, `disc = exp(-r * dt)`, `disc_total = disc^(M-1)`, `drift_const = (r - sigma²/2) * dt`, `vol_sqrt_dt = sigma * sqrt(dt)` using dedicated utility fxDiv/fxMul/fxExpLUT/fxSqrt instances (time-shared, not on the critical path).
 
 **Timeout guard:** `CORE_MAX_CYCLES` checked in every long-running FSM state. Timeout returns marker `0xDEAD0001`.
+
+### Two running modes (host-side)
+
+The project targets two host-side running modes via `src/uart_host.py`:
+
+| Mode | Flag | Description |
+|------|------|-------------|
+| **Benchmark** | `--mode benchmark --target cpu\|fpga\|both` | Run CPU baseline and/or FPGA with identical parameters. Compare price, cycles, wall time, speedup. UART I/O time excluded from FPGA timing. |
+| **Live** | `--mode live --target cpu\|fpga` | Fetch real market data from Yahoo Finance, derive S0/sigma, run pricing with live params. Logs input snapshot for repeatability. |
 
 ### Verification status after integration
 
@@ -241,11 +255,50 @@ Rewrote `top_option_pricer.sv` from a single-sample stub into a complete two-pas
 - Added Q16.16 price sanity check in compute mode: logs price in human-readable form and flags out-of-range values.
 - `CORE_MAX_CYCLES` in compute mode set to 2M (sufficient for N=64, M=12 two-pass LSMC).
 
+## Pipeline Restoration Phase 2 (2026-03-02): Pre-compute GBM Constants
+
+**What changed:**
+- Added utility `fxSqrt` instance to `top_option_pricer.sv` (used only during INIT, idle during compute).
+- Added `ST_INIT_GBM_CONST` state between `ST_INIT_DT` and `ST_INIT_DISC` to compute:
+  - `sigma2 = sigma * sigma`
+  - `drift_const = (r - sigma2/2) * dt`
+  - `sqrt_dt = sqrt(dt)` via util_sqrt
+  - `vol_sqrt_dt = sigma * sqrt_dt`
+- Stored `drift_const_reg` and `vol_sqrt_dt_reg`; pass them to GBM instead of `r`, `sigma`, `dt`.
+- Modified `GBM.sv`: interface now takes `drift_const`, `vol_sqrt_dt`; removed `r`, `sigma`, `dt`.
+- GBM internal FSM simplified: removed MUL_SIGMA2, MUL_DRIFT, DO_SQRT, MUL_SIG_SQRT states and fxSqrt instance.
+- GBM per-sample flow: `diffusion = vol_sqrt_dt * z` → `exp_arg = drift_const + diffusion` → exp → S_next.
+
+**Why:** Pre-computing constants during INIT eliminates redundant per-sample sigma², sqrt(dt), and drift computation in GBM, reducing latency and preparing for streaming pipeline (Phase 3/4).
+
+**Verification:** Run `run_xvlog_src.ps1` and `run_xelab_smoke.ps1` to confirm compile/elab pass.
+
+## Pipeline Restoration Phase 3 (2026-03-02): GBM Streaming Pipeline
+
+**What changed:**
+- Rewrote `GBM.sv` from sequential FSM to streaming pipeline with skid buffers: MUL1(vol_sqrt_dt*z) → ADD+Saturate → EXP(signed) → MUL2(S*exp).
+- Added `SIGNED_RANGE` parameter to `fxExpLUT.sv`: when 1, uses 8192-entry `exp_signed_lut_8192.mem` for exp(a) with a in [-1,1], eliminating fxDiv reciprocal for negative exp_arg.
+- GBM now uses 2× fxMul, 1× fxExpLUT (signed). No fxSqrt, no fxDiv.
+- Input skid buffer decouples from inverseCDF backpressure.
+- S pipeline (4-stage) aligns S with exp output for final multiply.
+- Latency: ~5 cycles (MUL1=1 + EXP=2 + MUL2=1 + alignment).
+
+**Why:** Constant low latency, full throughput under backpressure, 3 fewer DSPs, ready for Phase 4 fully pipelined top-level.
+
+**Status:** Compile/elab clean. Has a known bug (S pipeline misalignment under non-streaming use — see `whats_next.md` Bug 2).
+
+**Phase 4 (next):** The top-level must be converted from serialized FSM control to streaming control that fires samples into the pipeline as fast as it can accept. This is the core architectural goal of the project — without it, the FPGA has no throughput advantage. See `whats_next.md` Part 4 for full details.
+
+**Verification:** Run `run_xvlog_src.ps1` and `run_xelab_smoke.ps1`.
+
 ## Known Gaps / Pending Validation
 
+- **Fully pipelined top-level (Phase 4):** The current top-level serializes samples through the pipeline (one at a time via FSM). The architectural goal is streaming overlap where the pipeline processes multiple in-flight samples simultaneously. This is the primary remaining architecture task. See `whats_next.md` Phase 4 for full details.
+- **Two running modes not yet validated end-to-end:** Benchmark mode (`--mode benchmark --target both`) and Live mode (`--mode live`) in `src/uart_host.py` have not been tested with a working FPGA pipeline. Bugs 1-3 are now fixed; blocked by Phase 4 (streaming top-level).
 - Numerical/financial quality validation of produced price against C++ baseline with matching Q16.16 parameters is not yet done.
 - Multi-exercise-date expansion: current architecture checks exercise at step M-1 only; full backward induction with M-1 regression passes is future work.
 - Multi-batch UART regression (`tb_top_option_pricer_uart_multibatch`) was failing before due to `fxInvCDF_ZS` handshake issues -- the rewrite of that module should resolve it but has not been re-tested yet.
+- ~~**Three critical bugs block all forward progress**~~ **FIXED 2026-03-02** (see P0 Bug Fixes Phase 2 below).
 
 ## Baseline/Archive Policy Validation
 
@@ -306,4 +359,29 @@ Rewrote `top_option_pricer.sv` from a single-sample stub into a complete two-pas
 - 2026-03-01: tb_top_option_pricer_uart.sv: removed ENABLE_PLACEHOLDER_RESULT, updated debug probes, added price sanity check.
   - Status: compile clean.
   - Why: aligned to new two-pass top-level (old params/signal names no longer exist).
+
+## P0 Bug Fixes Phase 2 (2026-03-02): Three Critical Bugs + Timeout Guards
+
+**Bug 1 — sub_phase overflow (top_option_pricer.sv):**
+- `logic [1:0] sub_phase` widened to `logic [2:0] sub_phase` (needed values 0–4).
+- All sized literals changed from `2'd` to `3'd` for sub_phase.
+- Fix: FSM no longer stuck forever in ST_INIT_GBM_CONST; vol_sqrt_dt_reg is set and INIT completes.
+
+**Bug 2 — GBM S pipeline misalignment (GBM.sv):**
+- Replaced event-driven `s_pipe` shift register with `event_align_fifo_arr` FIFO.
+- Push on `mul1_accept`, pop on `exp_vout && mul2_rout`.
+- Fix: Correct S aligned with exp output under sporadic (non-streaming) throughput.
+- Added ASSERT_STRICT assertion for S FIFO overflow.
+
+**Bug 3 — fxInvCDF_ZS C0 constant (fxInvCDF_ZS.sv):**
+- OLD: `C0 = (2 <<< QFRAC) + ((515517 <<< (QFRAC - 20)) / 1000000)` → 2.0 (negative shift undefined).
+- NEW: `C0 = (2515517 * (1 <<< QFRAC)) / 1000000` → 2.515517 in Q16.16.
+- Fix: Z-scores now correct; GBM paths and final price no longer corrupted.
+
+**Timeout guards (infinite-loop prevention):**
+- Added `core_timeout` checks to all blocking states: ST_INIT_DT, ST_INIT_GBM_CONST, ST_INIT_DISC, ST_INIT_DISC_TOTAL, ST_TRAIN_FEED, ST_WAIT_BETA, ST_DECIDE_FEED, ST_FINAL_DIV.
+- `CORE_MAX_CYCLES` (default 50M) ensures FSM never spins indefinitely.
+- Timeout returns marker `0xDEAD0001` via ST_DONE.
+
+**Verification:** Run `run_xvlog_src.ps1`, `run_xelab_smoke.ps1`, then `run_tb_top_uart_safe.ps1` (timeout mode) and `run_tb_top_uart_safe.ps1 -ComputeMode` (compute mode).
 

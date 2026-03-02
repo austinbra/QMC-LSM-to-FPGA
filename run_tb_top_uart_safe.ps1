@@ -2,9 +2,9 @@ param(
     [string]$XvlogExe = "xvlog",
     [string]$XelabExe = "xelab",
     [string]$XsimExe = "xsim",
-    [int]$XvlogTimeoutSeconds = 240,
-    [int]$XelabTimeoutSeconds = 300,
-    [int]$XsimTimeoutSeconds = 420,
+    [int]$XvlogTimeoutSeconds = 600,
+    [int]$XelabTimeoutSeconds = 600,
+    [int]$XsimTimeoutSeconds = 600,
     [switch]$ComputeMode,
     [switch]$NoCleanup
 )
@@ -21,7 +21,7 @@ function Invoke-ToolWithTimeout {
     $argString = ($Args | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
     Write-Host "Running: $Exe $argString"
 
-    $proc = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru -WindowStyle Hidden
+    $proc = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru -NoNewWindow -WorkingDirectory $PSScriptRoot
     if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
         Write-Warning "Timeout ($TimeoutSec s): killing $Exe (PID=$($proc.Id))"
         cmd /c "taskkill /F /T /PID $($proc.Id)" | Out-Null
