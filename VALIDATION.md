@@ -293,7 +293,7 @@ The project targets two host-side running modes via `src/uart_host.py`:
 
 ## Known Gaps / Pending Validation
 
-- **Fully pipelined top-level (Phase 4):** The current top-level serializes samples through the pipeline (one at a time via FSM). The architectural goal is streaming overlap where the pipeline processes multiple in-flight samples simultaneously. This is the primary remaining architecture task. See `whats_next.md` Phase 4 for full details.
+- ~~**Fully pipelined top-level (Phase 4)**~~ **COMPLETE 2026-03-02**: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k. Eliminates idle cycle between steps. Within a path, steps remain sequential (~21 cycle pipeline latency per step) since each step depends on the previous S. True multi-sample overlap requires lane replication (future work).
 - **Two running modes not yet validated end-to-end:** Benchmark mode (`--mode benchmark --target both`) and Live mode (`--mode live`) in `src/uart_host.py` have not been tested with a working FPGA pipeline. Bugs 1-3 are now fixed; blocked by Phase 4 (streaming top-level).
 - Numerical/financial quality validation of produced price against C++ baseline with matching Q16.16 parameters is not yet done.
 - Multi-exercise-date expansion: current architecture checks exercise at step M-1 only; full backward induction with M-1 regression passes is future work.
@@ -384,4 +384,13 @@ The project targets two host-side running modes via `src/uart_host.py`:
 - Timeout returns marker `0xDEAD0001` via ST_DONE.
 
 **Verification:** Run `run_xvlog_src.ps1`, `run_xelab_smoke.ps1`, then `run_tb_top_uart_safe.ps1` (timeout mode) and `run_tb_top_uart_safe.ps1 -ComputeMode` (compute mode).
+
+## Phase 4: Fully Pipelined Top-Level (2026-03-02)
+
+**What changed:**
+- ST_TRAIN_STEP and ST_DECIDE_STEP: fire Sobol for step k+1 in the **same cycle** as GBM outputs step k (when sobol_rout).
+- Eliminates idle cycle between steps; pipeline latency overlaps with FSM bookkeeping.
+- When sobol_rout is low (backpressure), fall back to Phase A on next cycle.
+
+**Why:** Eliminates idle cycle between steps. Within a path, steps are still sequential (~21 cycle pipeline latency) since step k+1 depends on step k's S output. Savings: ~1 cycle per step (22→21). True ~5 cycles/step throughput requires lane replication (multiple paths in parallel).
 

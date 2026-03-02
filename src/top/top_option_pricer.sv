@@ -519,21 +519,20 @@ module top_mc_option_pricer #(
             end
 
             // =================================================================
-            // TRAIN_STEP: drive sobol -> inverseCDF -> GBM for one step
+            // TRAIN_STEP: streaming pipeline — fire Sobol as soon as pipeline accepts
+            // Phase 4: fire step k+1 in SAME cycle as GBM outputs step k (no idle cycle)
             // =================================================================
             ST_TRAIN_STEP: begin
                 if (core_timeout) begin
                     state <= ST_DONE;
                 end else if (!sobol_accepted && sobol_rout) begin
-                    // Phase A: fire sobol for this step (one-shot)
+                    // Phase A: fire sobol for this step (path start or first step)
                     sobol_idx      <= {16'd0, path_idx};
                     sobol_dim      <= step_idx[$clog2(MAX_STEPS)-1:0];
                     sobol_vin      <= 1'b1;
                     sobol_accepted <= 1'b1;
                 end else if (sobol_accepted && gbm_vout) begin
-                    // Phase B: collect GBM result (only after sobol was fired)
-                    sobol_accepted <= 1'b0;
-
+                    // Phase B: collect GBM result, update s_curr/step_idx
                     if (step_idx == lat_M - 2)
                         s_exercise <= gbm_s_next;
 
@@ -541,9 +540,18 @@ module top_mc_option_pricer #(
                     step_idx <= step_idx + 1'b1;
 
                     if (step_idx == lat_M - 1) begin
-                        s_terminal <= gbm_s_next;
-                        sub_phase  <= '0;
-                        state      <= ST_TRAIN_FEED;
+                        // Terminal step: path complete, go to TRAIN_FEED
+                        s_terminal     <= gbm_s_next;
+                        sub_phase      <= '0;
+                        sobol_accepted <= 1'b0;
+                        state          <= ST_TRAIN_FEED;
+                    end else if (sobol_rout) begin
+                        sobol_idx      <= {16'd0, path_idx};
+                        sobol_dim      <= step_idx[$clog2(MAX_STEPS)-1:0] + 1'b1;
+                        sobol_vin      <= 1'b1;
+                        sobol_accepted <= 1'b1;
+                    end else begin
+                        sobol_accepted <= 1'b0;
                     end
                 end
             end
@@ -600,7 +608,7 @@ module top_mc_option_pricer #(
             end
 
             // =================================================================
-            // DECIDE_STEP: regenerate path, same as TRAIN_STEP
+            // DECIDE_STEP: streaming pipeline, same as TRAIN_STEP
             // =================================================================
             ST_DECIDE_STEP: begin
                 if (core_timeout) begin
@@ -611,8 +619,6 @@ module top_mc_option_pricer #(
                     sobol_vin      <= 1'b1;
                     sobol_accepted <= 1'b1;
                 end else if (sobol_accepted && gbm_vout) begin
-                    sobol_accepted <= 1'b0;
-
                     if (step_idx == lat_M - 2)
                         s_exercise <= gbm_s_next;
 
@@ -620,9 +626,17 @@ module top_mc_option_pricer #(
                     step_idx <= step_idx + 1'b1;
 
                     if (step_idx == lat_M - 1) begin
-                        s_terminal <= gbm_s_next;
-                        sub_phase  <= '0;
-                        state      <= ST_DECIDE_FEED;
+                        s_terminal     <= gbm_s_next;
+                        sub_phase      <= '0;
+                        sobol_accepted <= 1'b0;
+                        state          <= ST_DECIDE_FEED;
+                    end else if (sobol_rout) begin
+                        sobol_idx      <= {16'd0, path_idx};
+                        sobol_dim      <= step_idx[$clog2(MAX_STEPS)-1:0] + 1'b1;
+                        sobol_vin      <= 1'b1;
+                        sobol_accepted <= 1'b1;
+                    end else begin
+                        sobol_accepted <= 1'b0;
                     end
                 end
             end

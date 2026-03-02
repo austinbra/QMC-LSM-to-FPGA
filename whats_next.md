@@ -41,7 +41,7 @@ Pipeline restoration plan status:
   Phase 1: Signed ExpLUT                   COMPLETE
   Phase 2: Pre-compute GBM const           COMPLETE  (sub_phase fixed, timeout guards added)
   Phase 3: GBM streaming pipeline          COMPLETE  (S pipe fixed via event_align_fifo_arr)
-  Phase 4: FULLY PIPELINED TOP-LEVEL       NOT STARTED  (THE core goal)
+  Phase 4: FULLY PIPELINED TOP-LEVEL       COMPLETE  (fire step k+1 same cycle as gbm_vout)
   Phase 5: Accumulator stall fix           NOT STARTED
   Phase 6: Two host running modes          NOT STARTED  (benchmark + live)
   Phase 7: Cleanup/docs                    NOT STARTED
@@ -676,6 +676,11 @@ PART 8: PROGRESS LOG (append-only, most recent at bottom)
     BUG 3: fxInvCDF_ZS C0 rewritten as (2515517*(1<<<QFRAC))/1000000 = 164858 (2.515517).
     Timeout guards added to ST_INIT_DT, ST_INIT_GBM_CONST, ST_INIT_DISC,
     ST_INIT_DISC_TOTAL, ST_TRAIN_FEED, ST_WAIT_BETA, ST_DECIDE_FEED, ST_FINAL_DIV.
+- 2026-03-02: Phase 4 — fully pipelined top-level:
+    ST_TRAIN_STEP and ST_DECIDE_STEP fire Sobol for step k+1 in the same
+    cycle GBM outputs step k (when sobol_rout is high). Eliminates idle
+    cycle between steps. GBM.sv forward-reference errors fixed (declarations
+    moved to top of module).
 
 ===============================================================================
 END OF FILE

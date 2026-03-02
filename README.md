@@ -15,7 +15,7 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 ## Validation And Status
 - Validation log: `VALIDATION.md` (commands run, results, known gaps).
 - Active implementation tracker: `whats_next.md`.
-- Current state: Pipeline stages (Sobol, InverseCDF, GBM, Accumulator, Regression, LSM Decision) are implemented with ready/valid + skid buffers. Top-level two-pass integration compiles/elaborates clean but has known bugs being fixed. Streaming overlap (Phase 4) is the next critical milestone.
+- Current state: Pipeline stages (Sobol, InverseCDF, GBM, Accumulator, Regression, LSM Decision) are implemented with ready/valid + skid buffers. Top-level two-pass LSMC engine compiles/elaborates clean. Phase 4 streaming overlap is implemented (fire step k+1 same cycle as GBM output).
 
 ---
 
@@ -102,8 +102,9 @@ Two host-side modes are supported via `src/uart_host.py`:
 
 ### Current status
 - Top-level two-pass LSMC engine compiles and elaborates clean.
-- Three critical bugs fixed (sub_phase overflow, GBM S pipeline misalignment, InvCDF C0 constant). See `whats_next.md` for details.
-- Next critical milestone: Phase 4 — convert serialized FSM to fully pipelined streaming control for real throughput advantage.
+- Three critical bugs fixed (sub_phase overflow, GBM S pipeline misalignment, InvCDF C0 constant).
+- Phase 4 complete: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k (zero idle cycles between steps).
+- Next: Phase 5 (accumulator/regression stall diagnosis), numerical validation against C++ baseline.
 
 ---
 
@@ -126,7 +127,7 @@ Two host-side modes are supported via `src/uart_host.py`:
 - [x] LSM decision (exercise vs continuation comparison).
 - [x] C++ fixed‑point baseline (Q16.16, aligned with FPGA arithmetic).
 - [x] Top‑level two-pass LSMC integration with UART I/O.
-- [ ] **Phase 4: Fully pipelined top-level** — streaming overlap, not serialized FSM. **(next critical milestone)**
+- [x] **Phase 4: Fully pipelined top-level** — fire Sobol for step k+1 in same cycle as GBM output.
 - [ ] Two running modes: benchmark (CPU vs FPGA comparison) + live (Yahoo Finance data).
 - [ ] PUT/CALL runtime flag (trivial: swap payoff direction, ~10 lines of RTL).
 - [ ] Richer error reporting in result packet (timeout, singular regression, saturation flags).
@@ -135,7 +136,7 @@ Two host-side modes are supported via `src/uart_host.py`:
 - [ ] Lane replication (NUM_LANES > 1) for throughput scaling.
 - [ ] Multi-exercise-date expansion (full backward induction).
 
-> :warning: Active development — P0 bugs fixed, Phase 4 (fully pipelined top-level) is next. See `whats_next.md` for full status.
+> :warning: Active development — P0 bugs fixed, Phase 4 complete. See `whats_next.md` for full status.
 
 ---
 
