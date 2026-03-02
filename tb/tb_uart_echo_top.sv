@@ -5,6 +5,7 @@ module tb_uart32_7param_echo;
     parameter int CLK_FREQ_HZ = 100_000_000;
     parameter int BAUD_RATE   = 115200;
     localparam int NUM_WORDS = 7;
+    localparam int MAX_WAIT_CYCLES = 500000;
 
     logic clk = 0;
     logic rst_n = 0;
@@ -48,6 +49,7 @@ module tb_uart32_7param_echo;
     logic [31:0] send_vals [NUM_WORDS];
     logic [31:0] recv_vals [NUM_WORDS];
     int i, errors;
+    int wait_cycles;
 
     initial begin
         $display("=== Sending RX Words ===");
@@ -71,7 +73,12 @@ module tb_uart32_7param_echo;
 
         // Send each word
         for (i = 0; i < NUM_WORDS; i++) begin
-            wait (ready_out);
+            wait_cycles = 0;
+            while (!ready_out && wait_cycles < MAX_WAIT_CYCLES) begin
+                @(posedge clk);
+                wait_cycles++;
+            end
+            if (!ready_out) $fatal(1, "Timeout waiting for ready_out");
             @(posedge clk);
             data_in = send_vals[i];
             valid_in = 1;
@@ -79,7 +86,12 @@ module tb_uart32_7param_echo;
             valid_in = 0;
             $display("TX->FPGA: Word %0d = 0x%08h", i, send_vals[i]);
 
-            wait (valid_out);
+            wait_cycles = 0;
+            while (!valid_out && wait_cycles < MAX_WAIT_CYCLES) begin
+                @(posedge clk);
+                wait_cycles++;
+            end
+            if (!valid_out) $fatal(1, "Timeout waiting for valid_out");
             @(posedge clk);
             recv_vals[i] = data_out;
             $display("FPGA->TX: Word %0d = 0x%08h", i, data_out);

@@ -1,7 +1,7 @@
 # -------------------------
 # 1) Build artifacts
 # -------------------------
-# If you put all your compiled binaries in a folder like /build or /bin:
+# If  put all your compiled binaries in a folder like /build or /bin:
 build/
 bin/
 obj/
@@ -16,14 +16,14 @@ obj/
 # -------------------------
 # 2) CMake / Makefile files
 # -------------------------
-# If you use CMake, ignore its generated files:
+# If  use CMake, ignore its generated files:
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
 build/
 
-# If you use a plain Makefile and generate .a/.so:
+# if using plain Makefile and generate .a/.so:
 *.a
 *.so
 
@@ -76,3 +76,22 @@ Desktop.ini
 data/*.csv
 data/*.json
 logging/
+
+# Vivado / XSIM generated artifacts
+.Xil/
+xsim.dir/
+*.pb
+*.jou
+*.wdb
+*.str
+*.debug
+webtalk*.log
+vivado*.log
+xvlog.log
+xelab.log
+xsim.log
+xvlog.pb
+xelab.pb
+
+# Vivado runtime text dumps
+dfx_runtime.txt

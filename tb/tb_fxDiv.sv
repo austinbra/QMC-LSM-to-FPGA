@@ -17,6 +17,7 @@ module tb_fxDiv;
     localparam int WIDTH         = 32;      // must match fxDiv.sv
     localparam int QFRAC         = 16;
     localparam int N_VECTORS     = 20;      // number of random tests
+    localparam int MAX_WAIT_CYCLES = 2000;
 
     //------------------------------------------------------------------
     //  Clock & reset
@@ -54,14 +55,27 @@ module tb_fxDiv;
     //------------------------------------------------------------------
     int sent = 0;
     initial begin
+        int waited_rst;
+        int nonzero_tries;
         valid_in = 1'b0;
-        wait (rst_n);
+        waited_rst = 0;
+        while (!rst_n && waited_rst < MAX_WAIT_CYCLES) begin
+            @(posedge clk);
+            waited_rst++;
+        end
+        if (!rst_n) $fatal(1, "Timeout waiting for rst_n");
 
         /* simple back-to-back traffic until N_VECTORS sent */
         forever begin
             // random operands   (den ≠ 0)
             automatic int n = $urandom_range(-200, 200);
-            automatic int d;  do d = $urandom_range(-200, 200); while (d == 0);
+            automatic int d;
+            nonzero_tries = 0;
+            do begin
+                d = $urandom_range(-200, 200);
+                nonzero_tries++;
+            end while (d == 0 && nonzero_tries < MAX_WAIT_CYCLES);
+            if (d == 0) $fatal(1, "Failed to draw non-zero denominator");
 
             // wait until core is ready
             @(posedge clk);

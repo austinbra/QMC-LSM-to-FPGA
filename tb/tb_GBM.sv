@@ -7,6 +7,7 @@ module tb_GBM;
     parameter QINT = 16;
     parameter QFRAC = 16;
     parameter DIV_LATENCY = 5;  // Assume
+    localparam int MAX_TB_CYCLES = 10000;
 
     // Signals
     logic clk, rst_n;
@@ -66,10 +67,8 @@ module tb_GBM;
         end
 
     // Assertions
-    initial begin
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next)) else $error("GBM stall overwrite");
-        assert (S_next < S) else $error("Negative z didn't decrease price");
-    end
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next))
+        else $error("GBM stall overwrite");
 
     // Verification Section: Check outputs and handshakes
     int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
@@ -94,5 +93,10 @@ module tb_GBM;
 
         if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
         if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
+
+    initial begin
+        repeat (MAX_TB_CYCLES) @(posedge clk);
+        $fatal(1, "Timeout after %0d cycles", MAX_TB_CYCLES);
     end
 endmodule

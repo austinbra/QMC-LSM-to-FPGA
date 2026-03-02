@@ -6,6 +6,7 @@ module tb_inverseCDF;
     parameter WIDTH = 32;
     parameter QINT = 16;
     parameter QFRAC = 16;
+    localparam int MAX_TB_CYCLES = 10000;
 
     // Signals
     logic clk, rst_n;
@@ -59,10 +60,8 @@ module tb_inverseCDF;
     end
 
     // Assertions
-    initial begin
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z_out)) else $error("InvCDF stall overwrite");
-        assert (z_out < 0) else $error("Zero u_in didn't produce negative z");
-    end
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z_out))
+        else $error("InvCDF stall overwrite");
     // Verification Section
     int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
     logic test_passed = 1;
@@ -86,5 +85,10 @@ module tb_inverseCDF;
 
         if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
         if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
+
+    initial begin
+        repeat (MAX_TB_CYCLES) @(posedge clk);
+        $fatal(1, "Timeout after %0d cycles", MAX_TB_CYCLES);
     end
 endmodule

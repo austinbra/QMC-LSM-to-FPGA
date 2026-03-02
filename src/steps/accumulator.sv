@@ -1,5 +1,5 @@
 timeunit 1ns; timeprecision 1ps;
-// Accumulator for quadratic LSM regression (β0 + β1·S + β2·S²)
+// Accumulator for quadratic LSM regression (b0 + b1*S + b2*S^2)
 module accumulator #(
     parameter int WIDTH       = fpga_cfg_pkg::FP_WIDTH,
     parameter int QINT        = fpga_cfg_pkg::FP_QINT,
@@ -24,9 +24,16 @@ module accumulator #(
     input  logic signed [WIDTH-1:0]  x_in,   // S_t
     input  logic signed [WIDTH-1:0]  y_in,   // discounted payoff
 
-    // β’s once per exercise date
+    // Runtime sample count (0 = use N_SAMPLES parameter default)
+    input  logic [$clog2(N_SAMPLES+1)-1:0] n_samples_cfg,
+
+    // beta coefficients once per exercise date
     output logic signed [WIDTH-1:0]  beta [0:2]
 );
+    // Effective sample count: runtime override or parameter default
+    wire [$clog2(N_SAMPLES+1)-1:0] n_eff = (n_samples_cfg != '0) ? n_samples_cfg
+                                            : N_SAMPLES[$clog2(N_SAMPLES+1)-1:0];
+
     // FSM
     localparam int IDLE  = 0;
     localparam int SOLVE = 1;
@@ -127,8 +134,8 @@ module accumulator #(
     assign accum_barrier_ready  = mul_x2_y_ready && mul_x2_x_ready && mul_x2_x2_ready;
     assign head_tail_ready      = accum_barrier_ready; // tie fxMul head ready_in
 
-    // Batch acceptance gating
-    wire accept_allowed = (state == IDLE) && (cnt_launch < N_SAMPLES);
+    // Batch acceptance gating (uses runtime n_eff)
+    wire accept_allowed = (state == IDLE) && (cnt_launch < n_eff) && !q_full;
 
     // Connect upstream to skid
     assign skid_s_data[0] = x_in;
@@ -209,8 +216,8 @@ module accumulator #(
         .clk       (clk),
         .rst_n     (rst_n),
         .push_en   (fire_head),
-        .push_data (align_push),
         .pop_en    (v_x2),
+        .push_data (align_push),
         .pop_data  (align_pop),
         .full      (q_full),
         .empty     (q_empty)
@@ -270,7 +277,7 @@ module accumulator #(
             sumx2y   <= '0;
             cnt_done <= '0;
         end else if (v_acc) begin
-            sum1     <= sum1   + acc_t'(1);
+            sum1     <= sum1   + (acc_t'(1) <<< QFRAC);
             sumx     <= sumx   + extended(x_aligned);
             sumx2    <= sumx2  + extended(x2_reg);
             sumx3    <= sumx3  + extended(x3);
@@ -298,7 +305,7 @@ module accumulator #(
     );
 
     // ----------------------------------------------------------------------------
-    // FSM: pack matrix and run solver after batch done
+    // FSM: pack matrix and run solver after batch done (uses runtime n_eff)
     // ----------------------------------------------------------------------------
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -309,13 +316,13 @@ module accumulator #(
             beta[1]      <= '0;
             beta[2]      <= '0;
         end else begin
-            valid_out    <= 1'b0;
+            // defaults: 1-cycle pulses
             start_solver <= 1'b0;
+            valid_out    <= 1'b0;
 
             unique case (state)
                 IDLE: begin
-                    if (cnt_done == N_SAMPLES) begin
-                        // Pack normal equations (saturated)
+                    if (cnt_done == n_eff) begin
                         mat_flat[0]  <= saturate(sum1);
                         mat_flat[1]  <= saturate(sumx);
                         mat_flat[2]  <= saturate(sumx2);
@@ -328,24 +335,16 @@ module accumulator #(
                         mat_flat[9]  <= saturate(sumx3);
                         mat_flat[10] <= saturate(sumx4);
                         mat_flat[11] <= saturate(sumx2y);
-                        // Handshake with solver
+
                         if (solver_ready) begin
                             start_solver <= 1'b1;
-                            state        <= SOLVE;
+                            state        <= WAIT;
                         end
-                    end
-                end
-
-                SOLVE: begin
-                    // De-assert start next cycle by default logic
-                    if (solver_ready) begin
-                        state <= WAIT;
                     end
                 end
 
                 WAIT: begin
                     if (solver_done && ready_in) begin
-                        // Regression handles fallback internally; just pass β’s
                         beta[2]   <= beta_s[2];
                         beta[1]   <= beta_s[1];
                         beta[0]   <= beta_s[0];
@@ -353,6 +352,10 @@ module accumulator #(
 
                         state     <= IDLE;
                     end
+                end
+
+                default: begin
+                    state <= IDLE;
                 end
             endcase
         end
@@ -373,8 +376,8 @@ module accumulator #(
         if (valid_out && !ready_in)
             assert ($stable(beta)) else $error("Accumulator: Output stall overwrite");
 
-        assert (!(cnt_launch == N_SAMPLES && ready_out))
-            else $error("Accumulator: ready_out high after N_SAMPLES");
+        assert (!(cnt_launch == n_eff && ready_out))
+            else $error("Accumulator: ready_out high after n_eff samples");
 
         assert (!(q_full && fire_head))
             else $error("Accumulator: x/y align FIFO overflow");

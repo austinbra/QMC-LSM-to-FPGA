@@ -6,6 +6,7 @@ module tb_regression;
     parameter WIDTH = 32;
     parameter QINT = 16;
     parameter QFRAC = 16;
+    localparam int MAX_TB_CYCLES = 10000;
 
     // Signals
     logic clk, rst_n;
@@ -18,7 +19,7 @@ module tb_regression;
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .valid_in(valid_in), .mat_flat(mat_flat),
-        .ready_out(ready_out), .ready_in(ready_in),.solver_ready(1'b1),
+        .ready_out(ready_out), .ready_in(ready_in),
         .valid_out(valid_out), .singular_err(singular_err),
         .beta(beta)
     );
@@ -52,9 +53,8 @@ module tb_regression;
     end
 
     // Assertions
-    initial begin
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta)) else $error("Regression stall overwrite");
-    end
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta))
+        else $error("Regression stall overwrite");
     // Verification Section
     int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
    logic test_passed = 1;
@@ -79,5 +79,10 @@ module tb_regression;
 
         if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
         if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
+
+    initial begin
+        repeat (MAX_TB_CYCLES) @(posedge clk);
+        $fatal(1, "Timeout after %0d cycles", MAX_TB_CYCLES);
     end
 endmodule

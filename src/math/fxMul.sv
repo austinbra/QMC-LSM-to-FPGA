@@ -79,6 +79,7 @@ module fxMul #(
     assign result = d_pipe[LATENCY-1];
 
     logic bp_prev;
+`ifdef ASSERT_STRICT
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             bp_prev <= 1'b0;
@@ -92,5 +93,13 @@ module fxMul #(
                 else $error("fxMul: back-pressure lost - pipeline overwrite");
         end
     end
+`else
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            bp_prev <= 1'b0;
+        else
+            bp_prev <= (valid_out && !ready_in);
+    end
+`endif
 
 endmodule

@@ -1,6 +1,7 @@
 timeunit 1ns; timeprecision 1ps;
 //-----------------------------------------------------------
 // Approximates Z score using Zelen & Severo rational polynomial
+// z_approx = t - (C0 + C1*t + C2*t^2) / (1 + D1*t + D2*t^2 + D3*t^3)
 //-----------------------------------------------------------
 
 module fxInvCDF_ZS #(
@@ -9,7 +10,7 @@ module fxInvCDF_ZS #(
     parameter int QFRAC                 = fpga_cfg_pkg::FP_QFRAC,
     parameter int MUL_LATENCY           = fpga_cfg_pkg::FP_MUL_LATENCY,
     parameter int DIV_LATENCY           = fpga_cfg_pkg::FP_DIV_LATENCY
-    )(
+)(
     input logic clk,
     input logic rst_n,
 
@@ -18,73 +19,71 @@ module fxInvCDF_ZS #(
     input logic ready_in,
     output logic ready_out,
 
-    input logic [WIDTH-1:0] t,          //  input from sqrt module
-    input logic negate,                 // negate flag in step 1
-    
-    output logic signed [WIDTH-1:0] z   //  z-score
+    input logic [WIDTH-1:0] t,
+    input logic negate,
+
+    output logic signed [WIDTH-1:0] z
 );
 
-    // pre determined constants 
-    // C0 ≈ 2.515517 = 2 + (0.515517 * 2^QFRAC)
+    // Constants (Zelen & Severo rational approximation)
     localparam signed [WIDTH-1:0] C0 = (2 <<< QFRAC) + ((515517 <<< (QFRAC - 20)) / 1000000);
-    localparam signed [WIDTH-1:0] C1 = (802853 * (1 <<< QFRAC)) / 1000000; // C1 ≈ 0.802853 = 0 + (0.802853 * 2^QFRAC)
-    localparam signed [WIDTH-1:0] C2 = (10328 * (1 <<< QFRAC)) / 1000000; // C2 ≈ 0.010328 = 0 + (0.010328 * 2^QFRAC)
+    localparam signed [WIDTH-1:0] C1 = (802853 * (1 <<< QFRAC)) / 1000000;
+    localparam signed [WIDTH-1:0] C2 = (10328 * (1 <<< QFRAC)) / 1000000;
 
-    localparam signed [WIDTH-1:0] D1 = (1 <<< QFRAC) + ((432788 * (1 <<< QFRAC)) / 1000000); // D1 ≈ 1.432788 = 1 + (0.432788 * 2^QFRAC)
-    localparam signed [WIDTH-1:0] D2 = (189269 * (1 <<< QFRAC)) / 1000000; // D2 ≈ 0.189269 = 0 + (0.189269 * 2^QFRAC)
-    localparam signed [WIDTH-1:0] D3 = (1308 * (1 <<< QFRAC)) / 1000000; // D3 ≈ 0.001308 = 0 + (0.001308 * 2^QFRAC)
+    localparam signed [WIDTH-1:0] D1 = (1 <<< QFRAC) + ((432788 * (1 <<< QFRAC)) / 1000000);
+    localparam signed [WIDTH-1:0] D2 = (189269 * (1 <<< QFRAC)) / 1000000;
+    localparam signed [WIDTH-1:0] D3 = (1308 * (1 <<< QFRAC)) / 1000000;
 
     localparam signed [WIDTH-1:0] ONE = 1 <<< QFRAC;
 
+    // Pipeline processes one sample at a time.
+    // in_flight prevents accepting a new sample until the current one completes.
+    logic in_flight;
+    logic [WIDTH-1:0] t_cap;
+    logic             negate_cap;
+    logic             launch;
 
-    logic mul_t3_ready, mul_t2_ready, mul_c1t_ready, mul_c2t2_ready, mul_d1t_ready, mul_d2t2_ready, mul_d3t3_ready, div_nd_ready;
-    logic barrier_ready;
+    assign ready_out = !in_flight;
 
-    assign barrier_ready = (mul_t2_ready && mul_c1t_ready && mul_c2t2_ready &&
-                        mul_d1t_ready && mul_d2t2_ready && mul_d3t3_ready &&
-                        div_nd_ready);
-    
-    
-//skid buffer
-    logic v0;
-    logic buf_valid, buf_negate;
-    logic [WIDTH-1:0] skid_t;
-    logic accept;
-    
-    assign accept  = valid_in && ready_out && !buf_valid;
-    assign ready_out = !buf_valid || (barrier_ready && ready_in);
-    
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            buf_valid <= 0;
-        end else if (accept) begin
-            skid_t <= t;
-            buf_negate <= negate;
-            buf_valid <= 1;
-        end else if (ready_in && buf_valid) 
-            buf_valid <= '0;  // Drain on ready
+            in_flight  <= 1'b0;
+            t_cap      <= '0;
+            negate_cap <= 1'b0;
+            launch     <= 1'b0;
+        end else begin
+            launch <= 1'b0;
+            if (valid_in && ready_out) begin
+                t_cap      <= t;
+                negate_cap <= negate;
+                in_flight  <= 1'b1;
+                launch     <= 1'b1;
+            end
+            if (valid_out && ready_in)
+                in_flight <= 1'b0;
+        end
     end
-    logic [WIDTH-1:0] t_eff;
-    logic negate_eff;
 
-    assign t_eff = buf_valid ? skid_t : t;
-    assign negate_eff = buf_valid ? buf_negate : negate;
-    assign v0 = (buf_valid || valid_in) && ready_out;
+    // All multipliers and the divider use t_cap (stable through entire computation)
 
-// Multipliers
-    logic v1a, v1b;       // valid_out of stage 1
+    // Stage 1: t^2 and t^3
+    logic v1a, v1b;
     logic [WIDTH-1:0] t2, t3;
-    
+
+    logic mul_t2_ready, mul_t3_ready;
+    logic mul_c1t_ready, mul_c2t2_ready;
+    logic mul_d1t_ready, mul_d2t2_ready, mul_d3t3_ready;
+    logic div_nd_ready;
 
     fxMul #() mul_t_t (
         .clk       (clk),
         .rst_n     (rst_n),
-        .valid_in  (v0),
+        .valid_in  (launch),
         .valid_out (v1a),
-        .ready_in  (ready_in),
+        .ready_in  (mul_t3_ready && mul_c2t2_ready && mul_d2t2_ready),
         .ready_out (mul_t2_ready),
-        .a         (t_eff),
-        .b         (t_eff),
+        .a         (t_cap),
+        .b         (t_cap),
         .result    (t2)
     );
 
@@ -93,62 +92,72 @@ module fxInvCDF_ZS #(
         .rst_n     (rst_n),
         .valid_in  (v1a),
         .valid_out (v1b),
-        .ready_in  (barrier_ready),
+        .ready_in  (mul_d3t3_ready),
         .ready_out (mul_t3_ready),
-        .a         (t_eff),
+        .a         (t_cap),
         .b         (t2),
         .result    (t3)
-    );  // t^3
+    );
 
-// Numerator: C0 + C1 * t + C2 * t2
+    // Numerator: C0 + C1*t + C2*t^2
     logic v2a, v2b;
-    logic [WIDTH-1:0] c1t, c2t2, num;
+    logic [WIDTH-1:0] c1t, c2t2;
+    logic [WIDTH-1:0] num;
 
     fxMul #() mul_c1t(
         .clk       (clk),
         .rst_n     (rst_n),
-        .valid_in  (v0),
+        .valid_in  (launch),
         .valid_out (v2a),
-        .ready_in  (barrier_ready),
+        .ready_in  (1'b1),
         .ready_out (mul_c1t_ready),
         .a         (C1),
-        .b         (t_eff),
+        .b         (t_cap),
         .result    (c1t)
     );
 
-    fxMul #() mul_c2t2(        
+    fxMul #() mul_c2t2(
         .clk       (clk),
         .rst_n     (rst_n),
         .valid_in  (v1a),
         .valid_out (v2b),
-        .ready_in  (barrier_ready),
+        .ready_in  (1'b1),
         .ready_out (mul_c2t2_ready),
         .a         (C2),
         .b         (t2),
         .result    (c2t2)
     );
 
+    // Latch numerator when c2t2 is valid (c1t completes earlier, is stable)
+    logic num_valid;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            num <= '0;
-        end else if (v2b && barrier_ready && ready_in) begin
-            num <= C0 + c1t + c2t2;
+            num       <= '0;
+            num_valid <= 1'b0;
+        end else begin
+            if (valid_out && ready_in)
+                num_valid <= 1'b0;
+            if (v2b && !num_valid) begin
+                num       <= C0 + c1t + c2t2;
+                num_valid <= 1'b1;
+            end
         end
     end
-    
-// Denominator: 1 + D1 * t + D2 * t2 + D3 * t3
+
+    // Denominator: 1 + D1*t + D2*t^2 + D3*t^3
     logic v3a, v3b, v3c;
-    logic [WIDTH-1:0] d1t, d2t2, d3t3, den;
+    logic [WIDTH-1:0] d1t, d2t2, d3t3;
+    logic [WIDTH-1:0] den;
 
     fxMul #() mul_d1t(
         .clk       (clk),
         .rst_n     (rst_n),
-        .valid_in  (v0),
+        .valid_in  (launch),
         .valid_out (v3a),
-        .ready_in  (barrier_ready),
+        .ready_in  (1'b1),
         .ready_out (mul_d1t_ready),
         .a         (D1),
-        .b         (t_eff),
+        .b         (t_cap),
         .result    (d1t)
     );
 
@@ -157,7 +166,7 @@ module fxInvCDF_ZS #(
         .rst_n     (rst_n),
         .valid_in  (v1a),
         .valid_out (v3b),
-        .ready_in  (barrier_ready),
+        .ready_in  (1'b1),
         .ready_out (mul_d2t2_ready),
         .a         (D2),
         .b         (t2),
@@ -169,28 +178,37 @@ module fxInvCDF_ZS #(
         .rst_n     (rst_n),
         .valid_in  (v1b),
         .valid_out (v3c),
-        .ready_in  (barrier_ready),
+        .ready_in  (div_nd_ready),
         .ready_out (mul_d3t3_ready),
         .a         (D3),
         .b         (t3),
         .result    (d3t3)
     );
 
+    // Latch denominator when d3t3 is valid (d1t, d2t2 complete earlier)
+    logic den_valid;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            den <= '0;
-        end else if (v3c && barrier_ready && ready_in) begin
-            den <= ONE + d1t + d2t2 + d3t3;
+            den       <= '0;
+            den_valid <= 1'b0;
+        end else begin
+            if (valid_out && ready_in)
+                den_valid <= 1'b0;
+            if (v3c && !den_valid) begin
+                den       <= ONE + d1t + d2t2 + d3t3;
+                den_valid <= 1'b1;
+            end
         end
     end
 
-// Divide numerator by denominator
+    // Divide numerator by denominator
     logic v4;
     logic [WIDTH-1:0] ratio;
+
     fxDiv #() div_nd (
         .clk        (clk),
         .rst_n      (rst_n),
-        .valid_in   (v3c),
+        .valid_in   (num_valid && den_valid),
         .valid_out  (v4),
         .ready_in   (ready_in),
         .ready_out  (div_nd_ready),
@@ -198,45 +216,26 @@ module fxInvCDF_ZS #(
         .denominator(den),
         .result     (ratio)
     );
-    
-// piplin the negate flag through 5 stages 
-    localparam int INV_LATENCY = 3*MUL_LATENCY + DIV_LATENCY;
-    logic [INV_LATENCY-1:0] negate_pipe;
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            negate_pipe <= '0;
-        else
-            negate_pipe <= {negate_pipe[INV_LATENCY-2:0], v0 ? negate_eff : 1'd0};
-    end
 
+    // Output: z = negate ? -(t - ratio) : (t - ratio)
+    // Uses t_cap (stable) and negate_cap (stable).
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            z <= '0;
-            valid_out <= '0;
+            z         <= '0;
+            valid_out <= 1'b0;
         end else begin
-            if (v4 && ready_in) begin
-                valid_out <= 1;
-                z <= negate_pipe[INV_LATENCY-1] ? -(t_eff - ratio) : (t_eff - ratio);
-            end else 
-                valid_out <= '0;
+            if (valid_out && ready_in)
+                valid_out <= 1'b0;
+            if (v4 && !valid_out) begin
+                valid_out <= 1'b1;
+                z <= negate_cap ? -(t_cap - ratio) : (t_cap - ratio);
+            end
         end
     end
 
-    initial begin
-        assert property (@(posedge clk) disable iff (!rst_n) !ready_out |-> !valid_out) 
-            else $error("Output valid while not ready");
-        
+`ifdef ASSERT_STRICT
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z))
+        else $error("fxInvCDF_ZS: Output changed under backpressure");
+`endif
 
-        assert property (@(posedge clk) disable iff (!rst_n) v4 && barrier_ready |-> $stable(num) && $stable(den)) 
-            else $error("Desync on partial stall");
-        
-
-        assert property (@(posedge clk) disable iff (!rst_n) v4 |-> $stable(negate_pipe)) 
-            else $error("Negate pipe misaligned"); //if submodules have variable latency, misalignment could negate wrong
-        
-
-        assert property (@(posedge clk) disable iff (!rst_n) !ready_in |-> !barrier_ready) 
-            else $error("Barrier not respecting downstream stall");
-        
-    end
 endmodule

@@ -4,7 +4,8 @@ module fxSqrt #(
     parameter int QINT = fpga_cfg_pkg::FP_QINT,
     parameter int QFRAC = fpga_cfg_pkg::FP_QFRAC,
     parameter int LUT_BITS = 8,
-    parameter int LATENCY = fpga_cfg_pkg::FP_SQRT_LATENCY
+    parameter int LATENCY = fpga_cfg_pkg::FP_SQRT_LATENCY,
+    parameter string LUT_FILE = "src/gen/sqrt_lut_256.mem"
 )(
     input  logic            clk,
     input  logic            rst_n,
@@ -19,10 +20,8 @@ module fxSqrt #(
     logic skid_valid;
     logic [WIDTH-1:0] skid_a;
 
-    // Stage-0 forward-ready (next stage can accept)
     logic mul1_ready;
 
-    // Single driver for ready_out
     assign ready_out = !skid_valid || mul1_ready;
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -37,18 +36,22 @@ module fxSqrt #(
         end
     end
 
-    logic [WIDTH-1:0] a_in = skid_valid ? skid_a : a;
+    logic [WIDTH-1:0] a_in;
+    assign a_in = skid_valid ? skid_a : a;
+
+    logic accept;
+    assign accept = valid_in && ready_out;
 
     // Control
     logic v0, v1, v2, v3, v4;
-    logic accept = valid_in && ready_out;
 
     localparam signed [WIDTH-1:0] ONE_POINT_FIVE = (3 << (QFRAC-1));
     localparam signed [WIDTH-1:0] HALF          = 1 << (QFRAC-1);
 
-    // Normalization
-    logic [WIDTH-1:0] a_norm, a_norm_reg;
-    logic [$clog2(QINT+1)-1:0] exp_adj, exp_adj_reg;
+    // Normalization (combinational from a_in)
+    logic [WIDTH-1:0] a_norm;
+    logic [$clog2(QINT+1)-1:0] exp_adj;
+    logic [$clog2(QINT+1)-1:0] exp_adj_reg;
 
     always_comb begin
         a_norm = a_in;
@@ -62,20 +65,18 @@ module fxSqrt #(
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            a_norm_reg <= '0;
+        if (!rst_n)
             exp_adj_reg <= '0;
-        end else if (accept) begin
-            a_norm_reg <= a_norm;
+        else if (accept)
             exp_adj_reg <= exp_adj;
-        end
     end
 
-    // LUT
-    logic [LUT_BITS-1:0] lut_index = a_norm_reg[QFRAC + LUT_BITS - 1 : QFRAC];
+    // LUT -- index from combinational a_norm (not the registered version)
+    logic [LUT_BITS-1:0] lut_index;
+    assign lut_index = a_norm[QFRAC + LUT_BITS - 1 : QFRAC];
 
     (* rom_style="block" *) logic signed [WIDTH-1:0] sqrt_lut [0:(1<<LUT_BITS)-1];
-    initial $readmemh("sqrt_lut_256.mem", sqrt_lut);
+    initial $readmemh(LUT_FILE, sqrt_lut);
 
     logic signed [WIDTH-1:0] v0_result, a_v0;
     assign v0 = accept;
@@ -112,7 +113,7 @@ module fxSqrt #(
             v1_result <= '0;
             a_v1      <= '0;
         end else if (v1 && mul2_ready) begin
-            v1_result <= (mul1_result + HALF) >>> QFRAC;  // signed
+            v1_result <= (mul1_result + HALF) >>> QFRAC;
             a_v1      <= a_v0;
         end
     end
@@ -120,7 +121,8 @@ module fxSqrt #(
     // Mul2: a * r0^2
     logic signed [WIDTH-1:0] mul2_result;
     logic mul3_ready, mul4_ready;
-    logic mul_barrier_ready = mul3_ready && mul4_ready;
+    logic mul_barrier_ready;
+    assign mul_barrier_ready = mul3_ready && mul4_ready;
 
     fxMul #(.LATENCY(2)) mul2 (
         .clk       (clk),
@@ -151,7 +153,7 @@ module fxSqrt #(
             v2_result <= '0;
             a_v2      <= '0;
         end else if (v2 && mul3_ready) begin
-            v2_result <= mul2_result >>> QFRAC;  // signed
+            v2_result <= mul2_result >>> QFRAC;
             a_v2      <= a_v1;
         end
     end
@@ -178,7 +180,7 @@ module fxSqrt #(
             v3_result <= '0;
             a_v3      <= '0;
         end else if (v3 && mul4_ready) begin
-            v3_result <= (mul3_result + HALF) >>> QFRAC;  // signed
+            v3_result <= (mul3_result + HALF) >>> QFRAC;
             a_v3      <= a_v2;
         end
     end
@@ -198,26 +200,15 @@ module fxSqrt #(
         .result    (mul4_result)
     );
 
-    logic signed [WIDTH-1:0] v4_result;
-    logic [WIDTH-1:0] tmp;
-
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            v4_result <= '0;
-        end else if (v4 && ready_in) begin
-            tmp       <= (mul4_result + HALF) >>> QFRAC;  // signed
-            v4_result <= tmp >> (exp_adj_reg >> 1);
-        end
-    end
+    // Output: combinational from mul4_result (stable under stall via fxMul guarantee)
+    wire signed [WIDTH-1:0] scaled_mul4 = (mul4_result + HALF) >>> QFRAC;
 
     assign valid_out = v4;
-    assign result    = v4_result;
+    assign result    = scaled_mul4 >> (exp_adj_reg >> 1);
 
     // Assertions
     property stall_stable;
         @(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(result);
     endproperty
-    initial begin
-        assert property (stall_stable) else $error("fxSqrt stall overwrite");
-    end
+    assert property (stall_stable) else $error("fxSqrt stall overwrite");
 endmodule

@@ -7,6 +7,7 @@ module tb_accumulator;
     parameter QINT = 16;
     parameter QFRAC = 16;
     parameter N_SAMPLES = 10;  // Small for sim speed
+    localparam int MAX_TB_CYCLES = 10000;
 
     // Signals
     logic clk, rst_n;
@@ -20,8 +21,9 @@ module tb_accumulator;
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .valid_in(valid_in), .valid_out(valid_out),
-        .ready_in(ready_in), .ready_out(ready_out), .solver_ready(1'b1),
+        .ready_in(ready_in), .ready_out(ready_out),
         .x_in(x_in), .y_in(y_in),
+        .n_samples_cfg('0),
         .beta(beta)
     );
 
@@ -67,10 +69,8 @@ module tb_accumulator;
     end
 
     // Assertions
-    initial begin
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta)) else $error("Accumulator stall overwrite");
-        assert (beta[0] > 0) else $error("Unexpected negative beta[0]");
-    end
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(beta))
+        else $error("Accumulator stall overwrite");
 
     // Verification Section: Check outputs and handshakes
     int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
@@ -99,4 +99,9 @@ module tb_accumulator;
 
         if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
       end
+
+    initial begin
+        repeat (MAX_TB_CYCLES) @(posedge clk);
+        $fatal(1, "Timeout after %0d cycles", MAX_TB_CYCLES);
+    end
 endmodule

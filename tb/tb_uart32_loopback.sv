@@ -6,6 +6,7 @@ module tb_uart32_loopback;
     parameter int BAUD_RATE   = 115200;
     localparam int CLKS_PER_BIT = CLK_FREQ_HZ / BAUD_RATE;
     localparam int NUM_TESTS = 10;
+    localparam int MAX_WAIT_CYCLES = 500000;
 
     logic clk = 0;
     logic rst_n = 0;
@@ -43,6 +44,7 @@ module tb_uart32_loopback;
 
     int i;
     int pass_count = 0;
+    int wait_cycles;
     logic [31:0] test_vals [NUM_TESTS];
 
     initial begin
@@ -67,7 +69,12 @@ module tb_uart32_loopback;
         end
 
         for (i = 0; i < NUM_TESTS; i++) begin
-            wait (ready_out == 1);
+            wait_cycles = 0;
+            while (ready_out != 1 && wait_cycles < MAX_WAIT_CYCLES) begin
+                @(posedge clk);
+                wait_cycles++;
+            end
+            if (ready_out != 1) $fatal(1, "Timeout waiting for ready_out");
             @(posedge clk);
 
             data_in = test_vals[i];
@@ -78,7 +85,12 @@ module tb_uart32_loopback;
             $display("[%0t ns] 📨 TX sent word = 0x%08h", $time, data_in);
 
             // Wait for RX to receive full word
-            wait (valid_out == 1);
+            wait_cycles = 0;
+            while (valid_out != 1 && wait_cycles < MAX_WAIT_CYCLES) begin
+                @(posedge clk);
+                wait_cycles++;
+            end
+            if (valid_out != 1) $fatal(1, "Timeout waiting for valid_out");
             @(posedge clk);
 
             $display("[%0t ns] 📥 RX received word = 0x%08h", $time, data_out);

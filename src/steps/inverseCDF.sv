@@ -1,4 +1,3 @@
-
 timeunit 1ns; timeprecision 1ps;
 module inverseCDF #(
     parameter int WIDTH              = fpga_cfg_pkg::FP_WIDTH,
@@ -12,75 +11,58 @@ module inverseCDF #(
     input logic valid_in,
     output logic ready_out,
 
-    input logic signed [WIDTH-1:0] u_in,        // input in [0,1) sobol sequence numbers
+    input logic signed [WIDTH-1:0] u_in,
 
     output logic valid_out,
     input logic ready_in,
 
-    output logic signed [WIDTH-1:0] z_out       //  output z-score
+    output logic signed [WIDTH-1:0] z_out
 );
 
     localparam signed [WIDTH-1:0] NEG_TWO = -(2 << QFRAC);
 
-    localparam int SQRT_LATENCY         = fpga_cfg_pkg::FP_SQRT_LATENCY;
-    localparam int MUL_LATENCY          = fpga_cfg_pkg::FP_MUL_LATENCY;
-    localparam int STEP1_LATENCY        = 1;               // inverseCDF_step1: Single register stage
-    localparam int LN_LATENCY           = 2;               // fxlnLUT: LUT read + output reg
-
-    localparam int NEG_DELAY = STEP1_LATENCY + LN_LATENCY + MUL_LATENCY + SQRT_LATENCY;
-
-    //skid buffer
+    // Skid buffer
     logic buf_valid;
-    logic signed [WIDTH-1:0] buf_u_in;  // Consistent naming
-    logic shift_en;
+    logic signed [WIDTH-1:0] buf_u_in;
 
     logic step1_ready, loglut_ready, mul_neg2_ready, sqrt_unit_ready, rational_ready;
     logic barrier_ready;
-    logic internal_ready;
-    
-    assign shift_en = ready_in && buf_valid;
+
     assign barrier_ready = step1_ready && loglut_ready && mul_neg2_ready && sqrt_unit_ready && rational_ready;
     assign ready_out = (!buf_valid || barrier_ready);
-    assign internal_ready = barrier_ready && ready_in;
-    
-    
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             buf_valid <= 0;
-            buf_u_in <= 0;
+            buf_u_in  <= 0;
         end else begin
             if (valid_in && ready_out) begin
-                buf_u_in <= u_in;
+                buf_u_in  <= u_in;
                 buf_valid <= 1;
-            end else if (shift_en && barrier_ready) begin
+            end else if (buf_valid && barrier_ready && ready_in) begin
                 buf_valid <= 0;
             end
         end
     end
 
-
-    
-
-
-
-    // Step 1: Convert sobol sequence number to (0,0.5] saving 
+    // Step 1: fold U(0,1) into (0,0.5] + negate flag
     logic [WIDTH-1:0] x;
     logic negate;
     logic v1;
 
-    inverseCDF_step1 #() step1 (    //save above or below .5 by whther to negate
+    inverseCDF_fold #() fold_stage (
         .clk(clk),
         .rst_n(rst_n),
-        .valid_in(valid_in),
+        .valid_in(buf_valid),
         .valid_out(v1),
         .ready_in(loglut_ready),
         .ready_out(step1_ready),
-        .u(buf_u_in),       //prob
+        .u(buf_u_in),
         .x(x),
         .negate(negate)
     );
 
-    // Step 2: find sqrt(y) = sqrt(-2 * ln(x))
+    // Step 2: sqrt(-2 * ln(x))
     logic [WIDTH-1:0] ln_x;
     logic v2a;
 
@@ -90,7 +72,7 @@ module inverseCDF #(
         .valid_in(v1),
         .valid_out(v2a),
         .ready_in(mul_neg2_ready),
-        .ready_out(loglut_ready),   // connect ready from next stage
+        .ready_out(loglut_ready),
         .a(x),
         .result(ln_x)
     );
@@ -99,18 +81,18 @@ module inverseCDF #(
     logic v2b;
 
     fxMul #() mul_neg2(
-        .clk(clk), 
+        .clk(clk),
         .rst_n(rst_n),
-        .valid_in(v2a),  
+        .valid_in(v2a),
         .valid_out(v2b),
         .ready_in(sqrt_unit_ready),
         .ready_out(mul_neg2_ready),
-        .a(ln_x), 
+        .a(ln_x),
         .b(NEG_TWO),
         .result(neg2_ln_x)
-        );   
+    );
 
-    logic [WIDTH-1:0] t;
+    logic [WIDTH-1:0] t_val;
     logic v3;
 
     fxSqrt #() sqrt_unit (
@@ -121,42 +103,45 @@ module inverseCDF #(
         .ready_in(rational_ready),
         .ready_out(sqrt_unit_ready),
         .a(neg2_ln_x),
-        .result(t)
+        .result(t_val)
     );
 
-    // Delay negate signal to align with t 
-    logic [NEG_DELAY-1:0] negate_pipe;
-    generate
-        for (genvar i = 0; i < NEG_DELAY; i++) begin //negate delay
-            always_ff @(posedge clk or negedge rst_n) begin
-                if (!rst_n) begin
-                    negate_pipe[i] <= '0;
-                end else if (shift_en && ready_in) begin
-                    if (i == 0) 
-                        negate_pipe[i] <= negate;  // Input from step1
-                    else 
-                        negate_pipe[i] <= negate_pipe[i-1];  // Shift  
-                end
-            end
-        end
-    endgenerate
+    // Negate alignment FIFO: push on fold output, pop on sqrt output.
+    // This keeps the negate flag in sync with the data flowing through
+    // ln -> mul -> sqrt, regardless of per-stage stall behavior.
+    logic [0:0] neg_push [0:0];
+    logic [0:0] neg_pop  [0:0];
+    logic       neg_fifo_full, neg_fifo_empty;
 
-    // Step 3: Rational approximation (Zelen & Severo)
+    assign neg_push[0] = negate;
 
-    fxInvCDF_ZS #(WIDTH, QINT) rational (
+    event_align_fifo_arr #(.N(1), .DW(1), .DEPTH(4)) u_negate_align (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .push_en   (v1),
+        .push_data (neg_push),
+        .pop_en    (v3 && rational_ready),
+        .pop_data  (neg_pop),
+        .full      (neg_fifo_full),
+        .empty     (neg_fifo_empty)
+    );
+
+    wire negate_aligned = neg_pop[0];
+
+    // Step 3: Zelen & Severo rational approximation
+    // fxInvCDF_ZS captures t and negate internally (one-at-a-time processing)
+    fxInvCDF_ZS #(.WIDTH(WIDTH), .QINT(QINT)) rational (
         .clk(clk),
         .rst_n(rst_n),
         .valid_in(v3),
         .valid_out(valid_out),
         .ready_in(ready_in),
         .ready_out(rational_ready),
-        .t(t),
-        .negate(negate_pipe[NEG_DELAY-1]),
-        .z(z_out));
+        .t(t_val),
+        .negate(negate_aligned),
+        .z(z_out)
+    );
 
-    initial begin   
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z_out)) 
-            else $error("InvCDF: Stall overwrite");
-        
-    end
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(z_out))
+        else $error("InvCDF: Stall overwrite");
 endmodule

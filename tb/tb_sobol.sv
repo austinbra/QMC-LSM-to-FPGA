@@ -3,6 +3,8 @@ module tb_sobol;
 
     parameter WIDTH = 32;
     parameter M     = 50;
+    localparam int MAX_WAIT_CYCLES = 2000;
+    localparam int MAX_TB_CYCLES   = 10000;
 
     // clocks & resets
     logic clk, rst_n;
@@ -82,13 +84,17 @@ module tb_sobol;
         valid_in = 0;
         ready_in = 1;
         $display("Cycle %t: Starting drain phase", $time);
-        begin
-            int idle_cycles = 0;
-            while (idle_cycles < 5) begin
+        begin : DRAIN_PHASE
+            automatic int idle_cycles = 0;
+            automatic int waited = 0;
+            while (idle_cycles < 5 && waited < MAX_WAIT_CYCLES) begin
                 @(posedge clk);
                 if (!valid_out) idle_cycles++;
                 else idle_cycles = 0;  // Reset if output appears
+                waited++;
             end
+            if (idle_cycles < 5)
+                $fatal(1, "Drain phase timeout after %0d cycles", MAX_WAIT_CYCLES);
         end
 
         #20 $finish;
@@ -99,10 +105,17 @@ module tb_sobol;
         input logic [WIDTH-1:0] idx,
         input logic [$clog2(M)-1:0] d
     );
+        int waited;
         idx_in = idx; dim_in = d;
         @(posedge clk);  // Allow 1 cycle for combinational logic to stabilize
         valid_in = 1;
-        while (!ready_out) @(posedge clk);  // Wait for acceptance (tests backpressure)
+        waited = 0;
+        while (!ready_out && waited < MAX_WAIT_CYCLES) begin  // Bounded backpressure wait
+            @(posedge clk);
+            waited++;
+        end
+        if (!ready_out)
+            $fatal(1, "drive_input timeout waiting for ready_out");
         @(posedge clk);  // Hold for the acceptance cycle
         valid_in = 0;
     endtask
@@ -219,6 +232,11 @@ module tb_sobol;
                  direction_tb[0],
                  direction_tb[1],
                  direction_tb[2]);
+    end
+
+    initial begin
+        repeat (MAX_TB_CYCLES) @(posedge clk);
+        $fatal(1, "Timeout after %0d cycles", MAX_TB_CYCLES);
     end
 
 endmodule

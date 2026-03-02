@@ -7,6 +7,7 @@ module tb_uart_loopback;
     parameter BAUD_RATE   = 115200;
     localparam int CLKS_PER_BIT = CLK_FREQ_HZ / BAUD_RATE;
     localparam int NUM_TESTS = 10;
+    localparam int MAX_WAIT_CYCLES = 200000;
 
     logic clk = 0;
     logic rst_n = 0;
@@ -43,6 +44,7 @@ module tb_uart_loopback;
     int i;
     byte tx_values [NUM_TESTS];
     int pass_count = 0;
+    int wait_cycles;
 
     initial begin
         $display("=== UART Loopback Test Started ===");
@@ -64,7 +66,12 @@ module tb_uart_loopback;
 
         for (i = 0; i < NUM_TESTS; i++) begin
             // Wait until transmitter is ready
-            wait (tx_busy == 0);
+            wait_cycles = 0;
+            while (tx_busy != 0 && wait_cycles < MAX_WAIT_CYCLES) begin
+                @(posedge clk);
+                wait_cycles++;
+            end
+            if (tx_busy != 0) $fatal(1, "Timeout waiting for tx_busy deassert");
             @(posedge clk);
 
             tx_data = tx_values[i];
@@ -78,7 +85,12 @@ module tb_uart_loopback;
             #(CLKS_PER_BIT * 11);
 
             // Wait for rx_valid
-            wait (rx_valid == 1);
+            wait_cycles = 0;
+            while (rx_valid != 1 && wait_cycles < MAX_WAIT_CYCLES) begin
+                @(posedge clk);
+                wait_cycles++;
+            end
+            if (rx_valid != 1) $fatal(1, "Timeout waiting for rx_valid");
             @(posedge clk);
 
             if (rx_data === tx_data) begin

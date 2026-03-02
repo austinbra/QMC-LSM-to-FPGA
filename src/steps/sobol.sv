@@ -2,7 +2,8 @@ timeunit 1ns; timeprecision 1ps;
 module sobol #(
     parameter int WIDTH     = fpga_cfg_pkg::FP_WIDTH,   // 16, 32, 64...
     parameter int M         = 50,                       // total time-steps "dimensions"
-    parameter int LANE_ID   = 0
+    parameter int LANE_ID   = 0,
+    parameter string DIRECTION_MEM_FILE = "src/gen/direction.mem"
 )(
     input  logic                         clk,
     input  logic                         rst_n,
@@ -17,13 +18,12 @@ module sobol #(
     output logic [WIDTH-1:0]             sobol_out,
 
     // expose the entire LUT for TB / debugging
-    output wire [WIDTH-1:0]         direction [0:M*WIDTH-1]
+    output logic [WIDTH-1:0]        direction [0:M*WIDTH-1]
 );
 
     // Direction-number memory :  M * WIDTH words
     (* ram_style = "block" *)
-    logic [WIDTH-1:0]  direction [0:M*WIDTH-1];
-    initial $readmemh("direction.mem", direction);
+    initial $readmemh(DIRECTION_MEM_FILE, direction);
     
 
     wire [WIDTH-1:0] gray;

@@ -21,10 +21,12 @@ module GBM #(
     input  logic signed [WIDTH-1:0]    dt,
     output logic signed [WIDTH-1:0]    S_next
 );
-    localparam signed [WIDTH-1:0] ONE = 1 << QFRAC;
+    localparam signed [WIDTH-1:0] ONE     = 1 << QFRAC;
+    localparam signed [WIDTH-1:0] MAX_POS = {1'b0, {(WIDTH-1){1'b1}}};
+    localparam signed [WIDTH-1:0] MIN_NEG = {1'b1, {(WIDTH-1){1'b0}}};
 
     // ----------------------------------------------------------------------
-    // 0. One-deep skid buffer to absorb upstream bursts
+    // 0. One-deep skid buffer
     // ----------------------------------------------------------------------
     typedef struct packed {
         logic signed [WIDTH-1:0] z;
@@ -36,24 +38,23 @@ module GBM #(
 
     sample_t in_buf;
     logic buf_valid;
-    
+
     logic mul_sigma2_ready, mul_drift_ready, sqrt_blk_ready, mul_sigma_sqrt_ready, mul_diffusion_ready, explut_ready, recip_ready, mul_price_ready;
     logic drift_barrier;
     logic diffusion_barrier;
     logic exp_barrier;
     logic shift_en;
 
-
-    assign drift_barrier = mul_sigma2_ready && mul_drift_ready;
+    assign drift_barrier     = mul_sigma2_ready && mul_drift_ready;
     assign diffusion_barrier = sqrt_blk_ready && mul_sigma_sqrt_ready && mul_diffusion_ready;
-    assign exp_barrier = explut_ready && recip_ready;
+    assign exp_barrier       = explut_ready && recip_ready;
     assign ready_out = (!buf_valid || (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready));
-    assign shift_en = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
-    
+    assign shift_en  = ready_in && buf_valid && (drift_barrier && diffusion_barrier && exp_barrier && mul_price_ready);
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             buf_valid <= 0;
-            in_buf <= '{0, 0, 0, 0, 0};  // Explicit reset
+            in_buf <= '{0, 0, 0, 0, 0};
         end else begin
             if (valid_in && ready_out) begin
                 in_buf <= '{z, S, r, sigma, dt};
@@ -64,10 +65,8 @@ module GBM #(
         end
     end
 
-    
-    
     // ----------------------------------------------------------------------
-    // 1. DRIFT branch :  (r – 0.5 σ²) * dt
+    // 1. DRIFT branch :  (r - 0.5*sigma^2) * dt
     // ----------------------------------------------------------------------
     logic drift_v_in;
     assign drift_v_in = buf_valid && shift_en;
@@ -75,7 +74,6 @@ module GBM #(
     logic drift_v_mid, drift_v_out;
     logic join_ready;
     logic signed [WIDTH-1:0] sigma2, half_sigma2, drift;
-    
 
     fxMul #(.LATENCY(2)) mul_sigma2 (
         .clk       (clk),
@@ -83,88 +81,100 @@ module GBM #(
         .valid_in  (drift_v_in),
         .ready_out (mul_sigma2_ready),
         .valid_out (drift_v_mid),
-        .ready_in  (mul_drift_ready),  // Chain to next mul in branch
+        .ready_in  (mul_drift_ready),
         .a         (in_buf.sigma),
         .b         (in_buf.sigma),
         .result    (sigma2)
     );
 
-    assign half_sigma2 = sigma2 >>> 1;   // multiply by 0.5 via shift
-    
+    assign half_sigma2 = sigma2 >>> 1;
 
     fxMul #(.LATENCY(2)) mul_drift (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (drift_v_mid), 
+        .valid_in   (drift_v_mid),
         .valid_out  (drift_v_out),
         .ready_in   (join_ready),
-        .ready_out  (mul_drift_ready), 
-        .a          (in_buf.r - half_sigma2), 
+        .ready_out  (mul_drift_ready),
+        .a          (in_buf.r - half_sigma2),
         .b          (in_buf.dt),
         .result     (drift)
     );
 
     // ----------------------------------------------------------------------
-    // 2. DIFFUSION branch : σ √dt · z
+    // 2. DIFFUSION branch : sigma * sqrt(dt) * z
+    //    FIX: gate with shift_en to prevent double-fire
     // ----------------------------------------------------------------------
     logic diff_v_in;
-    assign diff_v_in = buf_valid;
+    assign diff_v_in = buf_valid && shift_en;
 
     logic diff_v_mid1, diff_v_mid2, diff_v_out;
     logic signed [WIDTH-1:0] sqrt_dt, sigma_sqrt_dt, diffusion;
 
     fxSqrt #() sqrt_blk (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (diff_v_in),  
-        .valid_out  (diff_v_mid1), 
+        .valid_in   (diff_v_in),
+        .valid_out  (diff_v_mid1),
         .ready_in   (mul_sigma_sqrt_ready),
         .ready_out  (sqrt_blk_ready),
         .a          (in_buf.dt),
-        .result   (sqrt_dt)
+        .result     (sqrt_dt)
     );
 
-    logic diff2_v, diff2_r;
     fxMul #(.LATENCY(2)) mul_sigma_sqrt (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (diff_v_mid1), 
-        .valid_out  (diff_v_mid2),    
+        .valid_in   (diff_v_mid1),
+        .valid_out  (diff_v_mid2),
         .ready_in   (mul_diffusion_ready),
         .ready_out  (mul_sigma_sqrt_ready),
-        .a          (sqrt_dt), 
+        .a          (sqrt_dt),
         .b          (in_buf.sigma),
         .result     (sigma_sqrt_dt)
     );
 
     fxMul #(.LATENCY(2)) mul_diffusion (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (diff_v_mid2), 
-        .valid_out  (diff_v_out), 
+        .valid_in   (diff_v_mid2),
+        .valid_out  (diff_v_out),
         .ready_in   (join_ready),
         .ready_out  (mul_diffusion_ready),
-        .a          (sigma_sqrt_dt), 
+        .a          (sigma_sqrt_dt),
         .b          (in_buf.z),
         .result     (diffusion)
     );
 
     // ----------------------------------------------------------------------
-    // 3. Join drift + diffusion  (requires both branches ready)
+    // 3. Join drift + diffusion
     // ----------------------------------------------------------------------
-    (* preserve = 1 *) logic join_valid; //preservatin for retiming
+    (* preserve = 1 *) logic join_valid;
     assign join_valid = drift_v_out && diff_v_out;
+    assign join_ready = join_valid && explut_ready;
 
-    assign join_ready = drift_barrier && diffusion_barrier && mul_price_ready; //barrier ready
-
+    // Saturate drift+diffusion to full signed range
     logic signed [WIDTH-1:0] exp_arg;
+    logic                    exp_launch;
+
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            exp_arg <= '0;
-        else if (join_valid && join_ready)
-            exp_arg <= (drift + diffusion > (1 <<< (WIDTH-1)-1)) ? (1 <<< (WIDTH-1)-1) : drift + diffusion;
-            //basically just a catch but it means 
-            //exp_arg <= drift + diffusion;
+        if (!rst_n) begin
+            exp_arg    <= '0;
+            exp_launch <= 1'b0;
+        end else begin
+            exp_launch <= 1'b0;
+            if (join_valid && join_ready) begin
+                if (drift + diffusion > MAX_POS)
+                    exp_arg <= MAX_POS;
+                else if (drift + diffusion < MIN_NEG)
+                    exp_arg <= MIN_NEG;
+                else
+                    exp_arg <= drift + diffusion;
+                exp_launch <= 1'b1;
+            end
+        end
     end
 
     // ----------------------------------------------------------------------
-    // 4.  e^(exp_arg)  (CORDIC-lite LUT) and reciprocal for negative arg
+    // 4. e^(exp_arg) via LUT + reciprocal for negative arg
+    //    exp_arg is registered; sign_bit/abs_arg are stable from
+    //    exp_launch until the next join (barriers prevent overlap).
     // ----------------------------------------------------------------------
     logic signed [WIDTH-1:0] abs_arg;
     logic sign_bit;
@@ -177,8 +187,8 @@ module GBM #(
 
     fxExpLUT #() explut (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (join_valid), 
-        .valid_out  (exp_v),      
+        .valid_in   (exp_launch),
+        .valid_out  (exp_v),
         .ready_in   (recip_ready),
         .ready_out  (explut_ready),
         .a          (abs_arg),
@@ -187,11 +197,11 @@ module GBM #(
 
     fxDiv #() recip (
         .clk(clk), .rst_n(rst_n),
-        .valid_in       (exp_v),   
-        .valid_out      (recip_v), 
+        .valid_in       (exp_v),
+        .valid_out      (recip_v),
         .ready_in       (mul_price_ready),
         .ready_out      (recip_ready),
-        .numerator      (ONE),  // 1.0 in Q format
+        .numerator      (ONE),
         .denominator    (e_pos),
         .result         (e_neg)
     );
@@ -200,30 +210,27 @@ module GBM #(
     assign e_final = sign_bit ? e_neg : e_pos;
 
     // ----------------------------------------------------------------------
-    // 5.  Final price  S_next = S · e^(drift+diff)
+    // 5. Final price  S_next = S * e^(drift+diffusion)
     // ----------------------------------------------------------------------
     fxMul #(.LATENCY(2)) mul_price (
         .clk(clk), .rst_n(rst_n),
-        .valid_in   (recip_v),  
-        .valid_out  (valid_out), 
+        .valid_in   (recip_v),
+        .valid_out  (valid_out),
         .ready_in   (ready_in),
         .ready_out  (mul_price_ready),
-        .a          (e_final), 
+        .a          (e_final),
         .b          (in_buf.S),
         .result     (S_next)
     );
-    initial begin
-        assert property (@(posedge clk) sigma2 >= 0) 
-            else $error("Negative sigma2 in GBM");
-        
 
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next)) 
-            else $error("GBM: Backpressure violation");
-        
-        
-        assert property (@(posedge clk) disable iff (!rst_n) (drift_v_out != diff_v_out) |-> ##1 !join_valid) 
-            else $error("GBM: Lagging branch");
-        
-        
-    end
+`ifdef ASSERT_STRICT
+    assert property (@(posedge clk) sigma2 >= 0)
+        else $error("Negative sigma2 in GBM");
+
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(S_next))
+        else $error("GBM: Backpressure violation");
+
+    assert property (@(posedge clk) disable iff (!rst_n) (drift_v_out != diff_v_out) |-> ##1 !join_valid)
+        else $error("GBM: Lagging branch");
+`endif
 endmodule

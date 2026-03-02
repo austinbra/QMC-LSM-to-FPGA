@@ -1,11 +1,13 @@
 `timescale 1ns/1ps
 
-module tb_inverseCDF_step1;
+module tb_inverseCDF_fold;
 
     // Parameters
     parameter WIDTH = 32;
     parameter QINT = 16;
     parameter QFRAC = 16;
+    localparam logic [WIDTH-1:0] HALF = 1 << (QFRAC-1);
+    localparam int MAX_TB_CYCLES = 5000;
 
     // Signals
     logic clk, rst_n;
@@ -15,7 +17,7 @@ module tb_inverseCDF_step1;
     logic negate;
 
     // DUT
-    inverseCDF_step1 #(
+    inverseCDF_fold #(
         .WIDTH(WIDTH), .QINT(QINT), .QFRAC(QFRAC)
     ) dut (
         .clk(clk), .rst_n(rst_n),
@@ -42,8 +44,12 @@ module tb_inverseCDF_step1;
         // 10 transactions
         for (int i = 0; i < 10; i++) begin
             @(posedge clk);
-            valid_in = $urandom % 2;
-            u = $signed($urandom % (1 <<< QFRAC));  // [0,1) in QFRAC
+            // Hold input stable while backpressured to satisfy handshake contract.
+            if (!(valid_in && !ready_out)) begin
+                valid_in = $urandom % 2;
+                if (valid_in)
+                    u = $signed($urandom % (1 <<< QFRAC));  // [0,1) in QFRAC
+            end
             ready_in = ($urandom % 10 > 2) ? 1 : 0;
             if (valid_in && ready_out) $display("Cycle %t: Input accepted (ready_out=%b) - u=%d", $time, ready_out, u);
             if (!ready_in) $display("Cycle %t: Stall", $time);
@@ -60,15 +66,14 @@ module tb_inverseCDF_step1;
     end
 
     // Assertions
-    initial begin
-        assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(x)) else $error("Step1 stall overwrite");
-    end
+    assert property (@(posedge clk) disable iff (!rst_n) valid_out && !ready_in |=> $stable(x))
+        else $error("Step1 stall overwrite");
     // Verification Section
     int inputs_sent = 0, outputs_received = 0, stall_cycles = 0;
     logic test_passed = 1;
     always @(posedge clk) begin
         if (valid_in && ready_out) inputs_sent++;
-        if (valid_out) outputs_received++;
+        if (valid_out && ready_in) outputs_received++;
         if (!ready_in && valid_out) stall_cycles++;
     end
 
@@ -86,5 +91,11 @@ module tb_inverseCDF_step1;
 
         if (stall_cycles > 0) $display("Stalls OK (%d cycles)", stall_cycles);
         if (test_passed) $display("All tests PASSED"); else $display("Tests FAILED");
+    end
+
+    // Global watchdog to avoid runaway simulation.
+    initial begin
+        repeat (MAX_TB_CYCLES) @(posedge clk);
+        $fatal(1, "Timeout after %0d cycles", MAX_TB_CYCLES);
     end
 endmodule

@@ -4,11 +4,18 @@
 This project implements a **production‑grade, fully handshaked FPGA pipeline** for **American option pricing** using the **Longstaff–Schwartz Monte Carlo (LSMC)** method with **Quasi‑Monte Carlo (Sobol) sequences**.  
 The design targets a **Xilinx Spartan‑7 FPGA** (Vivado flow) and is written in **SystemVerilog**.  
 
-In addition to the FPGA implementation, the repository includes **C++ baselines**:
-- A **floating‑point baseline** (using Boost libraries) for reference accuracy.  
-- A **fixed‑point baseline** to match the FPGA’s Qm.n arithmetic and validate numerical trade‑offs.  
+In addition to the FPGA implementation, the repository includes a **fixed‑point C++ baseline**:
+- Located at `baseline/cpp_fixed/`.  
+- Matches the FPGA-oriented fixed-point arithmetic flow for practical comparison.  
 
 This allows direct comparison of **accuracy** and **performance** between CPU and FPGA implementations.
+
+---
+
+## Validation And Status
+- Validation log: `VALIDATION.md` (commands run, results, known gaps).
+- Active implementation tracker: `whats_next.txt`.
+- Current state: compile/elaboration checks are passing, but full top-level pricing datapath integration is still in progress.
 
 ---
 
@@ -20,7 +27,7 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 - **Mini‑batch accumulation**: accumulate regression sums across batches, run regression once, then sweep for path payoffs.
 - **Lane replication ready**: top‑level parameter to scale throughput by instantiating multiple parallel pipelines.
 - **Assertions** for handshake invariants and stall stability.
-- **C++ baselines** (floating‑point and fixed‑point) for validation and performance comparison.
+- **Fixed‑point C++ baseline** for validation and performance comparison.
 
 ---
 
@@ -41,13 +48,9 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 ---
 
 ## Baselines (C++)
-- **Floating‑point baseline**:  
-  - Uses Boost libraries for Sobol sequence generation and inverse CDF.  
-  - Provides high‑accuracy reference results.  
-- **Fixed‑point baseline**:  
-  - Implements the same Qm.n arithmetic as the FPGA.  
-  - Validates numerical approximations and error bounds.  
-- Both baselines are included in the repository and can be run on CPU for **accuracy checks** and **timing comparisons**.  
+- **Fixed‑point baseline** (`baseline/cpp_fixed/`):  
+  - Implements a fixed-point workflow aligned with the FPGA-oriented arithmetic path.  
+  - Validates numerical behavior and supports CPU timing comparisons.  
 
 ---
 
@@ -59,10 +62,26 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 4. Run behavioral simulation with provided testbenches.  
 5. Synthesize and implement for Spartan‑7.  
 
-### C++ Baselines
-1. Build with a modern C++ compiler (C++17 or later).  
-2. Floating‑point baseline requires Boost (for Sobol and statistical functions).  
-3. Run with the same option parameters as the FPGA to compare results.  
+### C++ Baseline
+1. Build `baseline/cpp_fixed/` with a modern C++ compiler (C++17 or later).  
+2. Run with the same option parameters as the FPGA to compare results.  
+3. For speed comparison, measure FPGA core cycles (exclude UART transfer time) and compare against baseline runtime.  
+4. You can drive CPU/FPGA run modes from `src/uart_host.py` using `--mode benchmark|live` and `--target cpu|fpga|both`.  
+
+### Current benchmark payload note
+- The host script can decode an FPGA result payload marker (`0xABCD0001`) with `(price_raw, cycles_lo, cycles_hi)`.
+- Placeholder result emission is disabled by default in `top_mc_option_pricer` to avoid misleading metrics.
+- Connect real compute done/price signals in top-level integration to enable meaningful benchmark payloads.
+
+### Next implementation steps (priority)
+1. Integrate full pricing datapath in `src/top/top_option_pricer.sv` and wire real `result_price`.
+2. Connect true pipeline-completion pulse to top-level `core_done` cycle-stop point.
+3. Verify FPGA UART returns real `(marker, price, cycles_lo, cycles_hi)` packet.
+4. Run benchmark mode with `src/uart_host.py` and report:
+   - CPU runtime
+   - FPGA core cycles and derived compute time (`--fpga-fclk-hz`)
+   - price delta and speedup
+5. Add live market mode verification (`--mode live --target cpu|fpga`) with logged input snapshot for repeatability.
 
 ---
 

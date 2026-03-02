@@ -30,14 +30,6 @@ module regression #(
     wire signed [WIDTH-1:0]      skid_s_data [0:11];
     logic signed [WIDTH-1:0]      skid_m_data [0:11];
 
-    // Stage barrier readies
-    wire stage2_barrier_ready;
-    wire stage3_barrier_ready;
-    wire stage5_barrier_ready;
-    wire stage6_barrier_ready;
-    wire stage6b_barrier_ready;
-    wire stage7_barrier_ready;
-
     // Map array to skid
     genvar gi;
     generate
@@ -101,11 +93,7 @@ module regression #(
         else if ((v7c && !singular_err && ready_in) || (mean_valid && ready_in))
             in_flight <= 1'b0;                                             // result committed
     end
-    wire all_barriers;
-    assign all_barriers = stage2_barrier_ready && stage3_barrier_ready &&
-                    stage5_barrier_ready && stage6_barrier_ready &&
-                    stage6b_barrier_ready && stage7_barrier_ready;
-    assign skid_m_ready = ready_in && ( !in_flight || all_barriers || mean_valid );
+    assign skid_m_ready = ready_in && !in_flight;
 
     rv_skid_arr_gate #(.N(12), .DW(WIDTH)) u_skid (
         .clk         (clk),
@@ -170,11 +158,9 @@ module regression #(
     logic signed [WIDTH-1:0] div0_den[0:3];
     logic signed [WIDTH-1:0] div0_res[0:3];
     logic [3:0]              div0_done;
-    logic                    div0_ready[0:3];  // 1-bit per divider
+    logic [0:3]              div0_ready;
 
-    assign pivot0_is_zero       = v1 && (mat1[0][0] == '0);
-    assign stage2_barrier_ready = div0_ready[0] && div0_ready[1] &&
-                                  div0_ready[2] && div0_ready[3];
+    assign pivot0_is_zero = v1 && (mat1[0][0] == '0);
 
     generate
         for (genvar g = 0; g < 4; ++g) begin : DIV0
@@ -188,7 +174,7 @@ module regression #(
                 .rst_n      (rst_n),
                 .valid_in   (v1 && !pivot0_is_zero),
                 .ready_out  (div0_ready[g]),
-                .ready_in   (stage3_barrier_ready),
+                .ready_in   (1'b1),
                 .valid_out  (div0_done[g]),
                 .numerator  (div0_num[g]),
                 .denominator(div0_den[g]),
@@ -198,17 +184,23 @@ module regression #(
     endgenerate
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) v2 <= 1'b0;
-        else begin
+        if (!rst_n) begin
+            v2 <= 1'b0;
+            for (int r=0; r<3; r++)
+            for (int c=0; c<4; c++)
+                mat2[r][c] <= '0;
+        end else begin
             v2          <= (&div0_done) && !pivot0_is_zero;
             mat2[0][0]  <= div0_res[0];
             mat2[0][1]  <= div0_res[1];
             mat2[0][2]  <= div0_res[2];
             mat2[0][3]  <= div0_res[3];
+
             mat2[1][0]  <= mat1[1][0];
             mat2[1][1]  <= mat1[1][1];
             mat2[1][2]  <= mat1[1][2];
             mat2[1][3]  <= mat1[1][3];
+            
             mat2[2][0]  <= mat1[2][0];
             mat2[2][1]  <= mat1[2][1];
             mat2[2][2]  <= mat1[2][2];
@@ -224,7 +216,6 @@ module regression #(
     logic [3:0]              mul0_ready_r0;
     logic [3:0]              mul0_ready_r1;
 
-    assign stage3_barrier_ready = (&mul0_ready_r0) && (&mul0_ready_r1);
 
     generate
         for (genvar c = 0; c < 4; c++) begin : MUL0
@@ -233,7 +224,7 @@ module regression #(
                 .rst_n     (rst_n),
                 .valid_in  (v2),
                 .ready_out (mul0_ready_r0[c]),
-                .ready_in  (stage5_barrier_ready),
+                .ready_in  (1'b1),
                 .valid_out (mul0_done_r0[c]),
                 .a         (mat2[1][0]),
                 .b         (mat2[0][c]),
@@ -244,7 +235,7 @@ module regression #(
                 .rst_n     (rst_n),
                 .valid_in  (v2),
                 .ready_out (mul0_ready_r1[c]),
-                .ready_in  (stage5_barrier_ready),
+                .ready_in  (1'b1),
                 .valid_out (mul0_done_r1[c]),
                 .a         (mat2[2][0]),
                 .b         (mat2[0][c]),
@@ -254,9 +245,15 @@ module regression #(
     endgenerate
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) v3 <= 1'b0;
-        else begin
-            v3 <= (&mul0_done_r0) && (&mul0_done_r1);
+        if (!rst_n) begin
+            v3 <= 1'b0;
+            for (int j = 0; j < 4; ++j) begin
+                mat3[0][j] <= '0;
+                mat3[1][j] <= '0;
+                mat3[2][j] <= '0;
+            end
+        end else begin
+            v3 <= (&mul0_done_r0) && (&mul0_done_r1) && v2;
             for (int j = 0; j < 4; ++j) begin
                 mat3[0][j] <= mat2[0][j];
                 mat3[1][j] <= mat2[1][j] - mul0_r0[j];
@@ -272,23 +269,26 @@ module regression #(
     end
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) v4 <= 1'b0;
-        else begin
-            v4          <= v3;
-            mat4[0][0]  <= mat3[0][0];
-            mat4[0][1]  <= mat3[0][1];
-            mat4[0][2]  <= mat3[0][2];
-            mat4[0][3]  <= mat3[0][3];
-            mat4[1][0]  <= mat3[1][0];
-            mat4[1][1]  <= mat3[pivot1_row][1];
-            mat4[1][2]  <= mat3[pivot1_row][2];
-            mat4[1][3]  <= mat3[pivot1_row][3];
-            mat4[2][0]  <= mat3[2][0];
-            mat4[2][1]  <= (pivot1_row == 2'd2) ? mat3[1][1] : mat3[2][1];
-            mat4[2][2]  <= (pivot1_row == 2'd2) ? mat3[1][2] : mat3[2][2];
-            mat4[2][3]  <= (pivot1_row == 2'd2) ? mat3[1][3] : mat3[2][3];
+    if (!rst_n) v4 <= 1'b0;
+    else begin
+        v4 <= v3;
+
+        // Row 0 unchanged
+        for (int j = 0; j < 4; j++) begin
+            mat4[0][j] <= mat3[0][j];
+        end
+
+        // Pivoted row 1
+        for (int j = 0; j < 4; j++) begin
+            mat4[1][j] <= mat3[pivot1_row][j];
+        end
+
+        // Remaining row 2
+        for (int j = 0; j < 4; j++) begin
+            mat4[2][j] <= (pivot1_row == 2'd2) ? mat3[1][j] : mat3[2][j];
         end
     end
+end
 
     // Stage 5 : normalize row‑1 (3 div)
     logic signed [WIDTH-1:0] div1_num[0:2];
@@ -297,8 +297,7 @@ module regression #(
     logic [2:0]              div1_done;
     logic [2:0]              div1_ready;
 
-    assign pivot1_is_zero       = v4 && (mat4[1][1] == '0);
-    assign stage5_barrier_ready = &div1_ready;
+    assign pivot1_is_zero = v4 && (mat4[1][1] == '0);
 
     generate
         for (genvar g1 = 0; g1 < 3; g1++) begin : DIV1
@@ -312,7 +311,7 @@ module regression #(
                 .rst_n      (rst_n),
                 .valid_in   (v4 && !pivot1_is_zero),
                 .ready_out  (div1_ready[g1]),
-                .ready_in   (stage6_barrier_ready),
+                .ready_in   (1'b1),
                 .valid_out  (div1_done[g1]),
                 .numerator  (div1_num[g1]),
                 .denominator(div1_den[g1]),
@@ -345,7 +344,6 @@ module regression #(
     logic [2:0]              mul_elim_valid;
     logic [2:0]              mul_elim_ready;
 
-    assign stage6_barrier_ready = &mul_elim_ready;
 
     generate
         for (genvar j = 1; j < 4; j++) begin : ELIM_MUL
@@ -355,7 +353,7 @@ module regression #(
                 .rst_n     (rst_n),
                 .valid_in  (v5),
                 .ready_out (mul_elim_ready[j-1]),
-                .ready_in  (stage6b_barrier_ready),
+                .ready_in  (1'b1),
                 .valid_out (mul_elim_valid[j-1]),
                 .a         (mat5[2][1]),
                 .b         (mat5[1][j]),
@@ -366,16 +364,30 @@ module regression #(
     endgenerate
 
     always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) v6 <= 1'b0;
-        else begin
-            v6 <= v5 && (&mul_elim_valid);
-            for (int j2 = 0; j2 < 4; ++j2) begin
-                mat6[0][j2] <= mat5[0][j2];
-                mat6[1][j2] <= mat5[1][j2];
+        if (!rst_n) begin
+            v6 <= 1'b0;
+            for (int j = 0; j < 4; ++j) begin
+                mat6[0][j] <= '0;
+                mat6[1][j] <= '0;
+                mat6[2][j] <= '0;
             end
-            mat6[2][0] <= mat5[2][0];
-            for (int j3 = 1; j3 < 4; ++j3) begin
-                mat6[2][j3] <= mat5[2][j3] - mul_elim_res[j3-1];
+        end else begin
+            // v5 pulse kicked all multipliers; wait until they all done
+            if (&mul_elim_valid) begin
+                v6 <= 1'b1;
+
+                for (int j2 = 0; j2 < 4; ++j2) begin
+                    mat6[0][j2] <= mat5[0][j2];
+                    mat6[1][j2] <= mat5[1][j2];
+                end
+
+                mat6[2][0] <= mat5[2][0];
+                for (int j3 = 1; j3 < 4; ++j3) begin
+                    mat6[2][j3] <= mat5[2][j3] - mul_elim_res[j3-1];
+                end
+            end else begin
+                v6 <= 1'b0;
+                // leave mat6 as-is
             end
         end
     end
@@ -388,20 +400,21 @@ module regression #(
     logic [2:0]              div2_ready;
 
     assign div2_den = mat6[2][2];
-    assign stage6b_barrier_ready = &div2_ready;
+    assign pivot2_is_zero = (mat6[2][2] == '0);
 
     generate
         for (genvar g2 = 0; g2 < 3; ++g2) begin : DIV2
             logic signed [2*WIDTH-1:0] num64_ext2;
             assign num64_ext2 = $signed({{WIDTH{mat6[2][g2+1][WIDTH-1]}}, mat6[2][g2+1]}) <<< QFRAC;
             assign div2_num[g2] = num64_ext2[WIDTH+QFRAC-1 : QFRAC];
+            
 
-            fxDiv #() d2 (
+            fxDiv #() d2 (// only start divides when we have a valid row-2 AND pivot non-zero
                 .clk        (clk),
                 .rst_n      (rst_n),
-                .valid_in   (v6),
+                .valid_in   (v6 && !pivot2_is_zero),
                 .ready_out  (div2_ready[g2]),
-                .ready_in   (stage7_barrier_ready),
+                .ready_in   (1'b1),
                 .valid_out  (div2_done[g2]),
                 .numerator  (div2_num[g2]),
                 .denominator(div2_den),
@@ -409,6 +422,7 @@ module regression #(
             );
         end
     endgenerate
+    
 
 
     // Stage‑7 : back‑substitution
@@ -422,7 +436,6 @@ module regression #(
     logic                     mul02_ready;
     logic                     div_b0_ready;
 
-    assign pivot2_is_zero = v6b && (mat7[2][2] == '0);
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -431,11 +444,11 @@ module regression #(
             // new solve starts
             singular_err <= 1'b0;
         end else if ((v1 && pivot0_is_zero) ||
-                    (v4 && pivot1_is_zero) ||
+                     (v4 && pivot1_is_zero) ||
                      (v6b && pivot2_is_zero)) begin
             singular_err <= 1'b1;
         end else if ((v7c && !singular_err && ready_in) ||
-                     (mean_valid && ready_in)) begin
+                    (mean_valid && ready_in)) begin
             // result committed (normal or fallback)
             singular_err <= 1'b0;
         end
@@ -445,7 +458,8 @@ module regression #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             v6b <= 1'b0;
-            for (j4 = 0; j4 < 4; ++j4) begin
+            // clear mat7
+            for (int j4 = 0; j4 < 4; ++j4) begin
                 mat7[0][j4] <= '0;
                 mat7[1][j4] <= '0;
             end
@@ -454,15 +468,22 @@ module regression #(
             mat7[2][2] <= '0;
             mat7[2][3] <= '0;
         end else begin
-            v6b <= &div2_done;
-            for (j4 = 0; j4 < 4; ++j4) begin
-                mat7[0][j4] <= mat6[0][j4];
-                mat7[1][j4] <= mat6[1][j4];
+            // pulsed when all 3 dividers finished and pivot was non-zero
+            v6b <= (&div2_done) && !pivot2_is_zero;
+
+            if ((&div2_done) && !pivot2_is_zero) begin
+                // copy rows 0 and 1
+                for (int j4 = 0; j4 < 4; ++j4) begin
+                    mat7[0][j4] <= mat6[0][j4];
+                    mat7[1][j4] <= mat6[1][j4];
+                end
+                // row 2: col0 ~ 0, col1..3 normalized
+                mat7[2][0] <= mat6[2][0];
+                mat7[2][1] <= div2_res[0];
+                mat7[2][2] <= div2_res[1];
+                mat7[2][3] <= div2_res[2];
             end
-            mat7[2][0] <= mat6[2][0];
-            mat7[2][1] <= div2_res[0];
-            mat7[2][2] <= div2_res[1];
-            mat7[2][3] <= div2_res[2];
+            // else: leave mat7 unchanged (we only care when v6b == 1)
         end
     end
 
@@ -527,28 +548,29 @@ module regression #(
         .result    (prod01)
     );
 
+    logic                    v7c2;
     fxMul #() mul02 (
         .clk       (clk),
         .rst_n     (rst_n),
         .valid_in  (v7c1),
         .ready_out (mul02_ready),
         .ready_in  (div_b0_ready),
-        .valid_out (/*unused*/),
+        .valid_out (v7c2),
         .a         (mat7[0][2]),
         .b         (bt2),
         .result    (prod02)
     );
 
     // bt0 = (mat7[0][3] - mat7[0][1]*bt1 - mat7[0][2]*bt2) / mat7[0][0]
-    logic signed [WIDTH-1:0] rhs0;
+    logic signed [WIDTH-1:0]   rhs0;
     logic signed [2*WIDTH-1:0] num64_b0;
-    assign rhs0 = $signed(mat7[0][3]) - prod01;
-    assign num64_b0  = $signed({{WIDTH{rhs0[WIDTH-1]}}, rhs0}) <<< QFRAC;
+    assign rhs0     = $signed(mat7[0][3]) - prod01 - prod02;
+    assign num64_b0 = $signed({{WIDTH{rhs0[WIDTH-1]}}, rhs0}) <<< QFRAC;
 
     fxDiv #() div_b0 (
         .clk        (clk),
         .rst_n      (rst_n),
-        .valid_in   (v7c1),
+        .valid_in   (v7c2),
         .ready_out  (div_b0_ready),
         .ready_in   (ready_in),
         .valid_out  (v7c),
@@ -557,7 +579,6 @@ module regression #(
         .result     (bt0)
     );
 
-    assign stage7_barrier_ready = div_b2_ready && mul12_ready && div_b1_ready && mul01_ready && mul02_ready && div_b0_ready;
 
     // Fallback mean: trigger when a pivot fails
     wire fallback_req;
@@ -606,6 +627,24 @@ module regression #(
             end
         end
     end
+`ifdef REG_DEBUG
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+        end else begin
+            if (v0 || v1 || v2 || v3 || v4 || v5 || v6 || v6b ||
+                v7a || v7b1 || v7b || v7c || mean_valid) begin
+                $display("%t [REG] v0=%0b v1=%0b v2=%0b v3=%0b v4=%0b v5=%0b v6=%0b v6b=%0b v7a=%0b v7b1=%0b v7b=%0b v7c=%0b mean_valid=%0b sing_err=%0b",
+                        $time, v0, v1, v2, v3, v4, v5, v6, v6b,
+                        v7a, v7b1, v7b, v7c, mean_valid, singular_err);
+                $display("%t [REG] pivots: p0_zero=%0b p1_zero=%0b p2_zero=%0b",
+                        $time, pivot0_is_zero, pivot1_is_zero, pivot2_is_zero);
+            end
+            if (valid_out)
+                $display("%t [REG] valid_out=1, beta0=%h beta1=%h beta2=%h",
+                        $time, beta[0], beta[1], beta[2]);
+        end
+    end
+`endif
 
     // Assertions
     // capture previous samples
@@ -666,7 +705,7 @@ module regression #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             for (int r=0;r<3;r++) for (int c=0;c<4;c++) mat2_q[r][c] <= '0;
-        end else if (!(v2 && stage2_barrier_ready)) begin
+        end else if (!(v2)) begin
             for (int r=0;r<3;r++) for (int c=0;c<4;c++) mat2_q[r][c] <= mat2[r][c];
         end
     end
@@ -677,7 +716,7 @@ module regression #(
             hold_s2_prev <= 1'b0; hold_s2 <= 1'b0;
         end else begin
             hold_s2_prev <= hold_s2;
-            hold_s2      <= v2 && stage2_barrier_ready;
+            hold_s2      <= v2;
             if (hold_s2_prev && hold_s2)
             for (int r=0;r<3;r++) for (int c=0;c<4;c++)
                 assert (mat2[r][c] == mat2_q[r][c])
