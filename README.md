@@ -110,7 +110,8 @@ Two host-side modes are supported via `src/uart_host.py`:
 - Top-level two-pass LSMC engine compiles and elaborates clean.
 - Three critical bugs fixed (sub_phase overflow, GBM S pipeline misalignment, InvCDF C0 constant).
 - Phase 4 complete: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k (zero idle cycles between steps).
-- Next: Phase 5 (accumulator/regression stall diagnosis), numerical validation against C++ baseline.
+- Phase 6 complete: benchmark + live host modes in `uart_host.py`.
+- Next: numerical validation (`python scripts/validate_numerical.py`), FPGA hardware testing.
 
 ---
 
@@ -134,7 +135,7 @@ Two host-side modes are supported via `src/uart_host.py`:
 - [x] C++ fixed‑point baseline (Q16.16, aligned with FPGA arithmetic).
 - [x] Top‑level two-pass LSMC integration with UART I/O.
 - [x] **Phase 4: Fully pipelined top-level** — fire Sobol for step k+1 in same cycle as GBM output.
-- [ ] Two running modes: benchmark (CPU vs FPGA comparison) + live (Yahoo Finance data).
+- [x] Two running modes: benchmark (CPU vs FPGA comparison) + live (Yahoo Finance data).
 - [ ] PUT/CALL runtime flag (trivial: swap payoff direction, ~10 lines of RTL).
 - [ ] Richer error reporting in result packet (timeout, singular regression, saturation flags).
 - [ ] Numerical validation: `python scripts/validate_numerical.py` (paths=64, steps=12).
@@ -142,7 +143,7 @@ Two host-side modes are supported via `src/uart_host.py`:
 - [ ] Lane replication (NUM_LANES > 1) for throughput scaling.
 - [ ] Multi-exercise-date expansion (full backward induction).
 
-> :warning: Active development — P0 bugs fixed, Phase 4 complete. See `whats_next.md` for full status.
+> :warning: Active development — Phases 1-6 complete. See `whats_next.md` for full status.
 
 ---
 

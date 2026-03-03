@@ -43,7 +43,7 @@ Pipeline restoration plan status:
   Phase 3: GBM streaming pipeline          COMPLETE  (S pipe fixed via event_align_fifo_arr)
   Phase 4: FULLY PIPELINED TOP-LEVEL       COMPLETE  (fire step k+1 same cycle as gbm_vout)
   Phase 5: Accumulator stall diagnosis     COMPLETE  (ACC_DEBUG traces added)
-  Phase 6: Two host running modes          NOT STARTED  (benchmark + live)
+  Phase 6: Two host running modes          COMPLETE  (benchmark + live)
   Phase 7: Cleanup/docs                    NOT STARTED
 
   NOTE: Phase 4 is NOT just an optimization — it is the CORE ARCHITECTURAL
@@ -250,24 +250,10 @@ P2: Numerical validation against C++ baseline
          S0=K=100, r=0.05, sigma=0.2, T=1.0). Compare prices; expect <1% rel error.
   Why:   Ultimate correctness check.
 
-P3: Phase 6 — Two host running modes (benchmark + live)
+P3: Phase 6 — Two host running modes (benchmark + live) — COMPLETE
   File: src/uart_host.py
-  What: The two running modes are a core deliverable, not optional:
-
-        MODE 1 — BENCHMARK (`--mode benchmark --target cpu|fpga|both`):
-          Run CPU baseline and/or FPGA with identical parameters.
-          Report: option price from each, FPGA core cycles, CPU wall time,
-          speedup ratio, price delta. UART I/O time excluded from FPGA metric
-          (use --fpga-fclk-hz with the cycle counter from result packet).
-          This is the primary way to prove the FPGA is correct AND fast.
-
-        MODE 2 — LIVE (`--mode live --target cpu|fpga`):
-          Fetch real-time market data from Yahoo Finance (yfinance package).
-          Derive S0 (current price) and sigma (historical volatility).
-          Run pricing with live-derived parameters.
-          Log input snapshot (ticker, date, derived params) for repeatability.
-          This is the demo/presentation mode for showing real-world usage.
-
+  MODE 1 — BENCHMARK: --target both prints price delta, rel_err, speedup (with --fpga-fclk-hz).
+  MODE 2 — LIVE: Logs input snapshot (ticker, date, params) before run.
   Prerequisite: Pipeline produces correct prices (Bugs 1-3 fixed + Phase 4/5).
 
 P4: Lane replication
@@ -690,6 +676,8 @@ PART 8: PROGRESS LOG (append-only, most recent at bottom)
 - 2026-03-02: P2 Multi-batch UART: run_tb_top_uart_safe.ps1 -Multibatch added.
 - 2026-03-02: P2 Numerical validation: scripts/validate_numerical.py added.
     Compares C++ baseline vs FPGA sim (paths=64, steps=12); expects <1% rel error.
+- 2026-03-02: P3 Phase 6: uart_host.py benchmark comparison (price delta, speedup),
+    live mode snapshot logging, q16_16_to_float signed fix.
 
 ===============================================================================
 END OF FILE

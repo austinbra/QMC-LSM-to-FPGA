@@ -288,10 +288,10 @@ The project targets two host-side running modes via `src/uart_host.py`:
 ## Known Gaps / Pending Validation
 
 - ~~**Fully pipelined top-level (Phase 4)**~~ **COMPLETE 2026-03-02**: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k. Eliminates idle cycle between steps. Within a path, steps remain sequential (~21 cycle pipeline latency per step) since each step depends on the previous S. True multi-sample overlap requires lane replication (future work).
-- **Two running modes not yet validated end-to-end:** Benchmark mode (`--mode benchmark --target both`) and Live mode (`--mode live`) in `src/uart_host.py` have not been tested with a working FPGA pipeline. Bugs 1-3 are now fixed; blocked by Phase 4 (streaming top-level).
-- Numerical/financial quality validation of produced price against C++ baseline with matching Q16.16 parameters is not yet done.
+- ~~**Two running modes not yet validated end-to-end**~~ **Phase 6 COMPLETE 2026-03-02**: Benchmark + live mode code implemented in `uart_host.py`. Not yet tested with real FPGA hardware (needs bitstream + serial connection).
+- Numerical validation script ready (`scripts/validate_numerical.py`); not yet run against FPGA sim.
 - Multi-exercise-date expansion: current architecture checks exercise at step M-1 only; full backward induction with M-1 regression passes is future work.
-- Multi-batch UART regression (`tb_top_option_pricer_uart_multibatch`) was failing before due to `fxInvCDF_ZS` handshake issues -- the rewrite of that module should resolve it but has not been re-tested yet.
+- Multi-batch UART regression: `-Multibatch` flag added; not yet re-tested after P0 fixes.
 - ~~**Three critical bugs block all forward progress**~~ **FIXED 2026-03-02** (see P0 Bug Fixes Phase 2 below).
 
 ## Baseline/Archive Policy Validation
@@ -407,4 +407,13 @@ python scripts/validate_numerical.py
 ```
 
 Prerequisite: C++ baseline built (`cd baseline/cpp_fixed && g++ ...`), Vivado in PATH.
+
+## Phase 6: Two Host Running Modes (2026-03-02)
+
+**uart_host.py enhancements:**
+
+- **BENCHMARK mode** (`--mode benchmark --target both`): Consolidated comparison report with price delta, relative error, CPU wall time, FPGA compute time (when --fpga-fclk-hz set), speedup ratio.
+- **LIVE mode** (`--mode live`): Logs input snapshot (ticker, date, derived params) for repeatability before running.
+- **q16_16_to_float**: Fixed signed handling for FPGA price decode.
+- **run_cpu_baseline**: Captures stdout+stderr for robust parsing.
 
