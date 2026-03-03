@@ -31,6 +31,7 @@ def load_params_file(path):
     missing = [k for k in required if k not in params]
     if missing:
         raise ValueError(f"Missing keys in params file: {missing}")
+    opt = params.get("option_type", "0")
     return {
         "paths": int(params["paths"]),
         "steps": int(params["steps"]),
@@ -39,6 +40,7 @@ def load_params_file(path):
         "r": float(params["r"]),
         "sigma": float(params["sigma"]),
         "T": float(params["T"]),
+        "option_type": int(opt) & 1,  # 0=CALL, 1=PUT
     }
 
 
@@ -70,6 +72,7 @@ def fetch_live_params(symbol, strike, r, maturity_years):
         "r": float(r),
         "sigma": sigma,
         "T": float(maturity_years),
+        "option_type": 0,  # CALL by default
     }
 
 
@@ -79,6 +82,7 @@ def send_params_uart(params, port, baud, timeout_s):
     except ImportError as exc:
         raise RuntimeError("pyserial is required for FPGA UART target. Install with: pip install pyserial") from exc
 
+    opt = params.get("option_type", 0)
     payload = [
         int(params["paths"]),
         int(params["steps"]),
@@ -87,6 +91,7 @@ def send_params_uart(params, port, baud, timeout_s):
         float_to_q16_16(params["r"]),
         float_to_q16_16(params["sigma"]),
         float_to_q16_16(params["T"]),
+        int(opt) & 1,  # 0=CALL, 1=PUT
     ]
 
     t0 = time.perf_counter()
@@ -95,7 +100,7 @@ def send_params_uart(params, port, baud, timeout_s):
             ser.write(struct.pack("<i", int(word)))
 
         echoes = []
-        for _ in range(7):
+        for _ in range(8):
             raw = ser.read(4)
             if len(raw) != 4:
                 raise TimeoutError("Timed out while waiting for UART echo words.")
@@ -148,9 +153,10 @@ def run_cpu_baseline(params, baseline_dir):
 
 
 def print_params(params):
+    opt_label = "PUT" if params.get("option_type", 0) else "CALL"
     print("Parameters:")
     print(f"  paths={params['paths']} steps={params['steps']} S0={params['S0']:.6f} K={params['K']:.6f}")
-    print(f"  r={params['r']:.6f} sigma={params['sigma']:.6f} T={params['T']:.6f}")
+    print(f"  r={params['r']:.6f} sigma={params['sigma']:.6f} T={params['T']:.6f} option_type={opt_label}")
 
 
 def main():

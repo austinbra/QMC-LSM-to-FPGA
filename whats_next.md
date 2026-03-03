@@ -29,7 +29,7 @@ Module-by-module verified status
   GBM.sv                 FIXED      S pipeline replaced with event_align_fifo_arr
   accumulator.sv         COMPLETE   64-bit sums, n_samples_cfg, regression trigger
   regression.sv          COMPLETE   Gaussian elim, fallback, assertions
-  lsm_decision.sv        COMPLETE   Proper LSMC decision with cont_value
+  lsm_decision.sv        COMPLETE   Proper LSMC decision with cont_value + PUT/CALL
   top_option_pricer.sv   FIXED      sub_phase widened [2:0], timeout guards added
   uart_input_handler.sv  FUNCTIONAL Messy formatting but works
   uart_rx/tx/32          COMPLETE   No issues
@@ -542,12 +542,10 @@ C. DESIGN DECISIONS AND FIXED CHOICES
      variable-size matrices in the accumulator and regression — not worth the
      complexity for the target application.
 
-3. Option type: Currently CALL ONLY (payoff = max(S-K, 0))
-   - Both lsm_decision.sv (line 105) and top_option_pricer.sv (line 293) use
-     CALL payoff direction.
-   - *** RECOMMENDATION: Add a PUT/CALL runtime flag (1 bit) from UART params.
-     The change is trivial: swap (S-K) vs (K-S) and (S>K) vs (K>S). This
-     doubles the utility of the design with ~5 lines of RTL. ***
+3. Option type: PUT/CALL runtime flag (D1 COMPLETE)
+   - 1-bit option_type flows from UART word 7 → lat_option_type → terminal_payoff
+     (top) + payoff (lsm_decision). 0=CALL max(S-K,0), 1=PUT max(K-S,0).
+   - uart_host.py and param files support option_type field.
 
 4. Single exercise date: Step M-1 only
    - True American options can exercise at ANY step. Full backward induction
@@ -573,13 +571,10 @@ D. RECOMMENDATIONS TO FLESH OUT THE DESIGN
 
 These are ordered by impact and effort:
 
-D1. [LOW EFFORT, HIGH IMPACT] Add PUT/CALL runtime flag
-    Files: src/io/handlers/uart_input_handler.sv, src/top/top_option_pricer.sv,
-           src/steps/lsm_decision.sv
-    What: Add 1-bit option_type to UART parameter set (or repurpose a bit from
-          an existing param). In lsm_decision and top payoff logic, use:
-            payoff = option_type ? max(K-S, 0) : max(S-K, 0)
-    Effort: ~10 lines of RTL. ~1 line in uart_host.py.
+D1. [COMPLETE] PUT/CALL runtime flag
+    Implemented: UART word 7 bit 0 carries option_type (0=CALL, 1=PUT).
+    lsm_decision.sv and top_option_pricer.sv terminal_payoff both use it.
+    uart_host.py sends it; param files support option_type=0|1.
 
 D2. [LOW EFFORT, MEDIUM IMPACT] Richer error reporting in result packet
     Files: src/io/handlers/uart_input_handler.sv, src/top/top_option_pricer.sv

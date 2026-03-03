@@ -12,6 +12,7 @@ module tb_lsm_decision;
     logic clk, rst_n;
     logic valid_in, valid_out, ready_in, ready_out;
     logic signed [WIDTH-1:0] S_t, beta [0:2], strike, cont_value, PV;
+    logic option_type;
 
     // DUT
     lsm_decision #(
@@ -21,6 +22,7 @@ module tb_lsm_decision;
         .valid_in(valid_in), .valid_out(valid_out),
         .ready_in(ready_in), .ready_out(ready_out),
         .S_t(S_t), .beta(beta), .strike(strike), .cont_value(cont_value),
+        .option_type(option_type),
         .PV(PV)
     );
 
@@ -36,6 +38,7 @@ module tb_lsm_decision;
         valid_in = 0;
         ready_in = 1;
         S_t = 0; strike = 0; cont_value = 0; beta = '{default:'0};
+        option_type = 0;  // CALL
         #20 rst_n = 1;
         $display("Cycle %t: Reset deasserted", $time);
 

@@ -179,7 +179,7 @@ Three BRAM-backed LUT modules had the same systemic defect: a registered address
 | Bug | Fix |
 |-----|-----|
 | `accumulator`: `sum1 <= sum1 + acc_t'(1)` adds integer 1, not 1.0 in Q16.16 | Changed to `sum1 + (acc_t'(1) <<< QFRAC)` |
-| `lsm_decision`: computes PUT payoff `max(K-S, 0)` while C++ computes CALL `max(S-K, 0)` | Changed to `diff = S_t - strike` and `payoff = (S_t > strike) ? diff : 0` |
+| `lsm_decision`: originally hard-coded to one payoff direction | D1: Added `option_type` input; 0=CALL `max(S-K,0)`, 1=PUT `max(K-S,0)`. Same flag used in `top_option_pricer.sv` terminal_payoff. |
 | C++ baseline `types.h`: `FRAC_BITS=21` (Q11.21) while FPGA uses Q16.16 | Changed to `FRAC_BITS=16` |
 | `tb_regression`, `tb_accumulator`: connect to non-existent `.solver_ready` port | Removed the port connection |
 

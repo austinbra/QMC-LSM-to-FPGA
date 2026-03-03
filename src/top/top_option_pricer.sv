@@ -41,6 +41,7 @@ module top_mc_option_pricer #(
     logic        batch_valid, batch_ready;
     logic [31:0] param_paths, param_steps, param_S0, param_K;
     logic [31:0] param_r, param_sigma, param_T;
+    logic        param_option_type;
     logic        result_valid;
     logic [31:0] result_price, result_cycles_lo, result_cycles_hi;
 
@@ -61,6 +62,7 @@ module top_mc_option_pricer #(
         .r          (param_r),
         .sigma      (param_sigma),
         .T          (param_T),
+        .option_type(param_option_type),
         .result_valid    (result_valid),
         .result_price    (result_price),
         .result_cycles_lo(result_cycles_lo),
@@ -90,6 +92,7 @@ module top_mc_option_pricer #(
     logic signed [W-1:0] lat_S0, lat_K, lat_r, lat_sigma, lat_T;
     logic [15:0]         lat_N;
     logic [7:0]          lat_M;
+    logic                lat_option_type;  // 0=CALL, 1=PUT
 
     // Computed during INIT
     logic signed [W-1:0] dt_reg;
@@ -272,25 +275,28 @@ module top_mc_option_pricer #(
     logic signed [W-1:0]    lsm_pv;
 
     lsm_decision u_lsm (
-        .clk        (clk_100),
-        .rst_n      (rst_btn_n),
-        .valid_in   (lsm_vin),
-        .valid_out  (lsm_vout),
-        .ready_in   (lsm_rin),
-        .ready_out  (lsm_rout),
-        .S_t        (s_exercise),
-        .beta       (beta_reg),
-        .strike     (lat_K),
-        .cont_value (acc_y),
-        .PV         (lsm_pv)
+        .clk         (clk_100),
+        .rst_n       (rst_btn_n),
+        .valid_in    (lsm_vin),
+        .valid_out   (lsm_vout),
+        .ready_in    (lsm_rin),
+        .ready_out   (lsm_rout),
+        .S_t         (s_exercise),
+        .beta        (beta_reg),
+        .strike      (lat_K),
+        .cont_value  (acc_y),
+        .option_type (lat_option_type),
+        .PV          (lsm_pv)
     );
     assign lsm_rin = 1'b1;
 
     // =========================================================================
-    // Payoff computation (combinational)
+    // Payoff computation (combinational): CALL max(S-K,0), PUT max(K-S,0)
     // =========================================================================
     logic signed [W-1:0] terminal_payoff;
-    assign terminal_payoff = (s_terminal > lat_K) ? (s_terminal - lat_K) : '0;
+    assign terminal_payoff = lat_option_type
+        ? ((lat_K > s_terminal) ? (lat_K - s_terminal) : '0)   // PUT
+        : ((s_terminal > lat_K) ? (s_terminal - lat_K) : '0);  // CALL
 
     // =========================================================================
     // Main FSM
@@ -349,6 +355,7 @@ module top_mc_option_pricer #(
             lat_S0 <= '0; lat_K <= '0; lat_r <= '0;
             lat_sigma <= '0; lat_T <= '0;
             lat_N <= '0; lat_M <= '0;
+            lat_option_type <= 1'b0;
         end else begin
             // Default: clear one-cycle pulses
             result_valid   <= 1'b0;
@@ -379,6 +386,7 @@ module top_mc_option_pricer #(
                     lat_T     <= $signed(param_T);
                     lat_N     <= param_paths[15:0];
                     lat_M     <= param_steps[7:0];
+                    lat_option_type <= param_option_type;
                     batch_ready   <= 1'b0;
                     core_active   <= 1'b1;
                     cycle_counter <= '0;

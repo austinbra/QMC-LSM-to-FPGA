@@ -18,6 +18,7 @@ module uart_input_handler #(
     output logic [31:0] r,
     output logic [31:0] sigma,
     output logic [31:0] T,
+    output logic        option_type,  // 0=CALL (max(S-K,0)), 1=PUT (max(K-S,0))
 
     // Optional benchmark/result packet from compute core
     input  logic        result_valid,
@@ -45,8 +46,8 @@ module uart_input_handler #(
     logic tx_valid;
     logic [31:0] tx_data;
     
-    // Register storage
-    logic [31:0] reg_array [0:6];
+    // Register storage (8 words: paths, steps, S0, K, r, sigma, T, option_type)
+    logic [31:0] reg_array [0:7];
     
     logic rx_valid_d;
 logic rx_valid_rising;
@@ -60,7 +61,7 @@ always_ff @(posedge clk or negedge rst_n) begin
 end
 
 assign rx_valid_rising = rx_valid && !rx_valid_d;
-assign batch_complete_pulse = (state == S_RECEIVE) && rx_valid_rising && (word_cnt == 6);
+assign batch_complete_pulse = (state == S_RECEIVE) && rx_valid_rising && (word_cnt == 7);
     
     // FSM sequential logic and storage
     always_ff @(posedge clk or negedge rst_n) begin
@@ -69,7 +70,7 @@ assign batch_complete_pulse = (state == S_RECEIVE) && rx_valid_rising && (word_c
             word_cnt <= 0;
         end else begin
             state <= next_state;
-            if (state == S_RECEIVE && rx_valid_rising && word_cnt <= 6) begin
+            if (state == S_RECEIVE && rx_valid_rising) begin
             reg_array[word_cnt] <= rx_data;
             $display("Stored word %0d = 0x%08x", word_cnt, rx_data);
             word_cnt <= word_cnt + 1;
@@ -87,7 +88,7 @@ assign batch_complete_pulse = (state == S_RECEIVE) && rx_valid_rising && (word_c
 
     case (state)
         S_RECEIVE: begin
-            if (rx_valid_rising && word_cnt == 6)
+            if (rx_valid_rising && word_cnt == 7)
                 next_state = S_WAIT_READY;
         end
 
@@ -107,6 +108,7 @@ end
     assign r = reg_array[4];
     assign sigma = reg_array[5];
     assign T = reg_array[6];
+    assign option_type = reg_array[7][0];
     
     // UART rx module
     uart_rx32 #(
@@ -119,8 +121,6 @@ end
         .valid_out(rx_valid),
         .data_out (rx_data)
     );
-    
-    // HERE
     
 // ==============================
     // Optional UART TX (Echo-back after full batch)
@@ -179,7 +179,7 @@ end
                 $display("%0t UART_HANDLER: echo word idx=%0d data=0x%08x", $time, echo_cnt, reg_array[echo_cnt]);
 `endif
                 echo_cnt <= echo_cnt + 1;
-                if (echo_cnt == 6)
+                if (echo_cnt == 7)
                     echoing <= 0;
             end
 

@@ -6,7 +6,7 @@ module tb_top_option_pricer_uart_core #(
 );
     parameter int CLK_FREQ_HZ = 100_000_000;
     parameter int BAUD_RATE   = 115200;
-    localparam int NUM_PARAMS = 7;
+    localparam int NUM_PARAMS = 8;
     localparam int NUM_RESULT = 4;
     localparam int MAX_WAIT_CYCLES = 8_000_000;
     localparam int unsigned DUT_CORE_MAX_CYCLES = EXPECT_TIMEOUT ? 32'd32 : 32'd2_000_000;
@@ -164,8 +164,7 @@ module tb_top_option_pricer_uart_core #(
     task automatic run_one_batch(input int batch_idx);
         begin
             // Q16.16 payload per batch:
-            // paths, steps, S0, K, r, sigma, T
-            // Keep payload fixed across batches to isolate request/response sequencing.
+            // paths, steps, S0, K, r, sigma, T, option_type (0=CALL, 1=PUT)
             params[0] = 32'd64;
             params[1] = 32'd12;
             params[2] = 32'h0064_0000; // 100.0
@@ -173,6 +172,7 @@ module tb_top_option_pricer_uart_core #(
             params[4] = 32'h0000_0CCD; // ~0.05
             params[5] = 32'h0000_3333; // ~0.2
             params[6] = 32'h0001_0000; // 1.0
+            params[7] = 32'd0;         // 0=CALL
 
             for (i = 0; i < NUM_PARAMS; i++) begin
                 send_word(params[i]);

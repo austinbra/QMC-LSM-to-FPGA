@@ -17,6 +17,7 @@ module lsm_decision #(
     input  logic signed [WIDTH-1:0]  beta[0:2],
     input  logic signed [WIDTH-1:0]  strike,
     input  logic signed [WIDTH-1:0]  cont_value,
+    input  logic                     option_type,  // 0=CALL max(S-K,0), 1=PUT max(K-S,0)
 
     output logic signed [WIDTH-1:0]  PV
 );
@@ -97,15 +98,22 @@ module lsm_decision #(
 
     assign c_val_next = beta_reg[0] + b1S + b2S2;
 
-    // Immediate exercise payoff: max(S - K, 0) for CALL
+    // Immediate exercise payoff: CALL max(S-K,0), PUT max(K-S,0)
     logic signed [WIDTH-1:0] payoff;
-    logic signed [WIDTH-1:0] diff;
+    logic signed [WIDTH-1:0] diff_call, diff_put;
     localparam signed [WIDTH-1:0] MAX_POS = {1'b0, {(WIDTH-1){1'b1}}};
 
-    assign diff = in_buf.S_t - in_buf.strike;
+    assign diff_call = in_buf.S_t - in_buf.strike;
+    assign diff_put  = in_buf.strike - in_buf.S_t;
 
     always_comb begin
-        payoff = (in_buf.S_t > in_buf.strike) ? ((diff > MAX_POS) ? MAX_POS : diff) : '0;
+        if (option_type) begin
+            // PUT: max(K - S, 0)
+            payoff = (in_buf.strike > in_buf.S_t) ? ((diff_put > MAX_POS) ? MAX_POS : diff_put) : '0;
+        end else begin
+            // CALL: max(S - K, 0)
+            payoff = (in_buf.S_t > in_buf.strike) ? ((diff_call > MAX_POS) ? MAX_POS : diff_call) : '0;
+        end
     end
 
     // Decision & output
