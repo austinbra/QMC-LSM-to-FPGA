@@ -236,6 +236,7 @@ P1: Phase 5 — Accumulator/regression stall diagnosis
 
 P2: Multi-batch UART regression
   File: tb/tb_top_option_pricer_uart.sv (tb_top_option_pricer_uart_multibatch)
+  Run:  run_tb_top_uart_safe.ps1 -Multibatch
   What: Re-test with the 3 bug fixes. The previous failure was "batch 1 returns X
         in result price" with an assertion in fxInvCDF_ZS. The rewrite of fxInvCDF_ZS
         with in_flight processing should fix this, but needs verification.
@@ -684,7 +685,9 @@ PART 8: PROGRESS LOG (append-only, most recent at bottom)
 - 2026-03-02: Phase 5 — accumulator stall diagnosis:
     accumulator.sv: ifdef ACC_DEBUG traces fire_head, cnt_launch, cnt_done,
     n_eff, start_solver, solver_done, solver_ready, singular_err.
-    run_tb_top_uart_safe.ps1: -DebugAcc adds +define+ACC_DEBUG.
+    run_tb_top_uart_safe.ps1: -DebugAcc uses -d ACC_DEBUG (Vivado syntax).
+    Fix: state==IDLE guard on cnt_done trace; -d ACC_DEBUG (not +define+).
+- 2026-03-02: P2 Multi-batch UART: run_tb_top_uart_safe.ps1 -Multibatch added.
 
 ===============================================================================
 END OF FILE

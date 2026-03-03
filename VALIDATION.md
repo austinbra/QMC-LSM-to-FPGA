@@ -140,15 +140,9 @@ This file records the main verification steps run during repository cleanup and 
 
 - Added wrapper:
   - `tb_top_option_pricer_uart_multibatch` (`NUM_BATCHES=2`)
-- Current result:
-  - **Fail** (diagnostic, reproducible)
-- Observed behavior:
-  - Batch 0 passes echo/result.
-  - Batch 1 returns X in result price.
-  - Assertion fires in `fxInvCDF_ZS` path: "Output valid while not ready".
-- Interpretation:
-  - There is still a back-to-back transaction robustness issue in the inverse-CDF handshake path under repeated sessions.
-  - Single-batch timeout/compute flows remain healthy and are still passing.
+- Run: `run_tb_top_uart_safe.ps1 -Multibatch`
+- Previous result (pre bug fixes): **Fail** — batch 1 returned X, fxInvCDF_ZS assertion.
+- Re-test after P0 fixes + fxInvCDF_ZS in_flight rewrite: run `-Multibatch` to verify.
 
 ## P0 Bug Fix Audit (2026-03-01)
 
@@ -383,7 +377,7 @@ The project targets two host-side running modes via `src/uart_host.py`:
 - `CORE_MAX_CYCLES` (default 50M) ensures FSM never spins indefinitely.
 - Timeout returns marker `0xDEAD0001` via ST_DONE.
 
-**Verification:** Run `run_xvlog_src.ps1`, `run_xelab_smoke.ps1`, then `run_tb_top_uart_safe.ps1` (timeout mode) and `run_tb_top_uart_safe.ps1 -ComputeMode` (compute mode).
+**Verification:** Run `run_xvlog_src.ps1`, `run_xelab_smoke.ps1`, then `run_tb_top_uart_safe.ps1` (timeout), `run_tb_top_uart_safe.ps1 -ComputeMode` (compute), `run_tb_top_uart_safe.ps1 -Multibatch` (2 batches).
 
 ## Phase 4: Fully Pipelined Top-Level (2026-03-02)
 

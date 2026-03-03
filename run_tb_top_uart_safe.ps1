@@ -6,8 +6,9 @@ param(
     [int]$XelabTimeoutSeconds = 600,
     [int]$XsimTimeoutSeconds = 600,
     [switch]$ComputeMode,
+    [switch]$Multibatch,  # Run tb_top_option_pricer_uart_multibatch (2 batches, compute mode)
     [switch]$NoCleanup,
-    [switch]$DebugAcc  # +define+ACC_DEBUG for accumulator stall diagnosis
+    [switch]$DebugAcc  # -d ACC_DEBUG for accumulator stall diagnosis
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,7 +66,10 @@ if ($DebugAcc) { $xvlogArgs += "-d"; $xvlogArgs += "ACC_DEBUG" }
 $xvlogArgs += $sources
 Invoke-ToolWithTimeout -Exe $XvlogExe -Args $xvlogArgs -TimeoutSec $XvlogTimeoutSeconds
 
-if ($ComputeMode) {
+if ($Multibatch) {
+    $top = "work.tb_top_option_pricer_uart_multibatch"
+    $snap = "tb_top_option_pricer_uart_multibatch_sim"
+} elseif ($ComputeMode) {
     $top = "work.tb_top_option_pricer_uart_compute"
     $snap = "tb_top_option_pricer_uart_compute_sim"
 } else {
