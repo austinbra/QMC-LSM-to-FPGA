@@ -23,14 +23,26 @@ function Invoke-ToolWithTimeout {
     $argString = ($Args | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
     Write-Host "Running: $Exe $argString"
 
-    $proc = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru -NoNewWindow -WorkingDirectory $PSScriptRoot
-    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-        Write-Warning "Timeout ($TimeoutSec s): killing $Exe (PID=$($proc.Id))"
-        cmd /c "taskkill /F /T /PID $($proc.Id)" | Out-Null
-        throw "$Exe timed out after $TimeoutSec seconds"
-    }
-    if ($proc.ExitCode -ne 0) {
-        throw "$Exe failed with exit code $($proc.ExitCode)"
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $proc = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru -NoNewWindow `
+            -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile `
+            -WorkingDirectory $PSScriptRoot
+        if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+            Write-Warning "Timeout ($TimeoutSec s): killing $Exe (PID=$($proc.Id))"
+            cmd /c "taskkill /F /T /PID $($proc.Id)" | Out-Null
+            throw "$Exe timed out after $TimeoutSec seconds"
+        }
+        $out = Get-Content $stdoutFile -Raw -ErrorAction SilentlyContinue
+        $err = Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue
+        if ($out) { Write-Output $out }
+        if ($err) { Write-Output $err }
+        if ($proc.ExitCode -ne 0) {
+            throw "$Exe failed with exit code $($proc.ExitCode)"
+        }
+    } finally {
+        Remove-Item $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
     }
 }
 

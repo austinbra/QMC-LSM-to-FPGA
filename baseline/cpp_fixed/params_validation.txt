@@ -1,0 +1,9 @@
+# Validation params: match tb_top_option_pricer_uart run_one_batch
+# Smaller than params_example for faster FPGA sim
+paths=64
+steps=12
+S0=100.0
+K=100.0
+r=0.05
+sigma=0.2
+T=1.0

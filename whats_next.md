@@ -244,11 +244,11 @@ P2: Multi-batch UART regression
         state between batches (sobol_accepted, s_curr, step_idx, etc.).
 
 P2: Numerical validation against C++ baseline
-  Files: baseline/cpp_fixed/, src/uart_host.py, new sweep script
-  What: Run both C++ baseline and FPGA simulation with identical parameters (S0=100,
-        K=100, r=0.05, sigma=0.2, T=1.0, paths=64-2048, steps=12). Compare prices.
-        Expect <1% relative error (bounded by QMC variance + Q16.16 quantization).
-  Why:  NEVER done. This is the ultimate correctness check.
+  Script: scripts/validate_numerical.py
+  Run:   python scripts/validate_numerical.py
+  What:  Run C++ baseline and FPGA sim with identical params (paths=64, steps=12,
+         S0=K=100, r=0.05, sigma=0.2, T=1.0). Compare prices; expect <1% rel error.
+  Why:   Ultimate correctness check.
 
 P3: Phase 6 — Two host running modes (benchmark + live)
   File: src/uart_host.py
@@ -688,6 +688,8 @@ PART 8: PROGRESS LOG (append-only, most recent at bottom)
     run_tb_top_uart_safe.ps1: -DebugAcc uses -d ACC_DEBUG (Vivado syntax).
     Fix: state==IDLE guard on cnt_done trace; -d ACC_DEBUG (not +define+).
 - 2026-03-02: P2 Multi-batch UART: run_tb_top_uart_safe.ps1 -Multibatch added.
+- 2026-03-02: P2 Numerical validation: scripts/validate_numerical.py added.
+    Compares C++ baseline vs FPGA sim (paths=64, steps=12); expects <1% rel error.
 
 ===============================================================================
 END OF FILE

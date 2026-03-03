@@ -396,3 +396,15 @@ The project targets two host-side running modes via `src/uart_host.py`:
 
 **Purpose:** Diagnose ST_WAIT_BETA stalls — verify cnt_done reaches n_eff, solver fires, and beta is produced.
 
+## P2: Numerical Validation vs C++ Baseline (2026-03-02)
+
+**Script:** `scripts/validate_numerical.py`
+
+Runs C++ baseline and FPGA simulation with identical params (paths=64, steps=12, S0=K=100, r=0.05, sigma=0.2, T=1.0). Compares prices; expects <1% relative error.
+
+```bash
+python scripts/validate_numerical.py
+```
+
+Prerequisite: C++ baseline built (`cd baseline/cpp_fixed && g++ ...`), Vivado in PATH.
+

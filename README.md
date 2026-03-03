@@ -79,6 +79,12 @@ If scripts time out, ensure Vivado is in PATH. Alternatively run directly:
 vivado -mode batch -source scripts/run_xvlog.tcl
 ```
 
+**Numerical validation** (C++ vs FPGA sim):
+```bash
+cd baseline/cpp_fixed && g++ -std=c++17 main.cpp pricing.cpp linalg.cpp sobol_wrapper.cpp utils.cpp -o fixed_baseline
+python scripts/validate_numerical.py
+```
+
 1. Add all SystemVerilog sources and memory initialization files (`*.mem`) to a Vivado project.  
 2. Generate the `fxDiv_core` IP (Xilinx `div_gen`) with parameters matching `fxDiv.sv`.  
 3. Add a clock constraint (e.g., 100 MHz).  
@@ -131,7 +137,7 @@ Two host-side modes are supported via `src/uart_host.py`:
 - [ ] Two running modes: benchmark (CPU vs FPGA comparison) + live (Yahoo Finance data).
 - [ ] PUT/CALL runtime flag (trivial: swap payoff direction, ~10 lines of RTL).
 - [ ] Richer error reporting in result packet (timeout, singular regression, saturation flags).
-- [ ] Numerical validation against C++ baseline across parameter sweeps.
+- [ ] Numerical validation: `python scripts/validate_numerical.py` (paths=64, steps=12).
 - [ ] Antithetic variates (run z and −z per Sobol point, halves variance for free).
 - [ ] Lane replication (NUM_LANES > 1) for throughput scaling.
 - [ ] Multi-exercise-date expansion (full backward induction).
