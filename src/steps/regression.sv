@@ -253,7 +253,8 @@ module regression #(
                 mat3[2][j] <= '0;
             end
         end else begin
-            v3 <= (&mul0_done_r0) && (&mul0_done_r1) && v2;
+            // v2 is 1-cycle pulse; mul0_done fires 1 cycle later — drop && v2 to avoid deadlock
+            v3 <= (&mul0_done_r0) && (&mul0_done_r1);
             for (int j = 0; j < 4; ++j) begin
                 mat3[0][j] <= mat2[0][j];
                 mat3[1][j] <= mat2[1][j] - mul0_r0[j];
@@ -443,9 +444,9 @@ end
         end else if (skid_m_valid && skid_m_ready) begin
             // new solve starts
             singular_err <= 1'b0;
-        end else if ((v1 && pivot0_is_zero) ||
+        end         else if ((v1 && pivot0_is_zero) ||
                      (v4 && pivot1_is_zero) ||
-                     (v6b && pivot2_is_zero)) begin
+                     (v6  && pivot2_is_zero)) begin
             singular_err <= 1'b1;
         end else if ((v7c && !singular_err && ready_in) ||
                     (mean_valid && ready_in)) begin
@@ -584,9 +585,11 @@ end
     wire fallback_req;
     logic signed [2*WIDTH-1:0] num64_mean;
 
+    // Use v6 (not v6b) for pivot2: v6b = (&div2_done) && !pivot2_is_zero, so when
+    // pivot2_is_zero v6b never fires. Fallback must trigger when we reach v6 and pivot2 is zero.
     assign fallback_req = (v1  && pivot0_is_zero) ||
                           (v4  && pivot1_is_zero) ||
-                          (v6b && pivot2_is_zero);
+                          (v6  && pivot2_is_zero);
 
     assign num64_mean = $signed({{WIDTH{sumy_latched[WIDTH-1]}}, sumy_latched}) <<< QFRAC;
 

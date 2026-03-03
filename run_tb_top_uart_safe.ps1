@@ -8,7 +8,9 @@ param(
     [switch]$ComputeMode,
     [switch]$Multibatch,  # Run tb_top_option_pricer_uart_multibatch (2 batches, compute mode)
     [switch]$NoCleanup,
-    [switch]$DebugAcc  # -d ACC_DEBUG for accumulator stall diagnosis
+    [switch]$DebugAcc,   # -d ACC_DEBUG for accumulator stall diagnosis
+    [switch]$DebugFsm,   # -d TOP_FSM_DEBUG for FSM state tracing
+    [switch]$DebugReg    # -d REG_DEBUG for regression pipeline tracing
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,6 +77,8 @@ $sources = @(
 
 $xvlogArgs = @("-nolog", "-sv")
 if ($DebugAcc) { $xvlogArgs += "-d"; $xvlogArgs += "ACC_DEBUG" }
+if ($DebugFsm) { $xvlogArgs += "-d"; $xvlogArgs += "TOP_FSM_DEBUG" }
+if ($DebugReg) { $xvlogArgs += "-d"; $xvlogArgs += "REG_DEBUG" }
 $xvlogArgs += $sources
 Invoke-ToolWithTimeout -Exe $XvlogExe -Args $xvlogArgs -TimeoutSec $XvlogTimeoutSeconds
 
