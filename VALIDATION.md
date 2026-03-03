@@ -394,3 +394,11 @@ The project targets two host-side running modes via `src/uart_host.py`:
 
 **Why:** Eliminates idle cycle between steps. Within a path, steps are still sequential (~21 cycle pipeline latency) since step k+1 depends on step k's S output. Savings: ~1 cycle per step (22→21). True ~5 cycles/step throughput requires lane replication (multiple paths in parallel).
 
+## Phase 5: Accumulator/Regression Stall Diagnosis (2026-03-02)
+
+**What added:**
+- `accumulator.sv`: `ifdef ACC_DEBUG` block traces fire_head, cnt_launch, cnt_done, n_eff, start_solver, solver_done, solver_ready, singular_err.
+- `run_tb_top_uart_safe.ps1 -DebugAcc`: adds `+define+ACC_DEBUG` for accumulator stall diagnosis.
+
+**Purpose:** Diagnose ST_WAIT_BETA stalls — verify cnt_done reaches n_eff, solver fires, and beta is produced.
+

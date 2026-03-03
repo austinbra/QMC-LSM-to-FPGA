@@ -362,6 +362,27 @@ module accumulator #(
     end
 
     // ----------------------------------------------------------------------------
+    // Phase 5: Stall diagnosis (gated behind ACC_DEBUG)
+    // ----------------------------------------------------------------------------
+`ifdef ACC_DEBUG
+    always_ff @(posedge clk) begin
+        if (rst_n) begin
+            if (fire_head)
+                $display("[ACC] t=%0t fire_head cnt_launch=%0d cnt_done=%0d n_eff=%0d",
+                         $time, cnt_launch, cnt_done, n_eff);
+            if (cnt_done == n_eff && n_eff != 0 && state == IDLE)
+                $display("[ACC] t=%0t cnt_done==n_eff solver_ready=%b start_solver=%b state=%0d",
+                         $time, solver_ready, start_solver, state);
+            if (start_solver)
+                $display("[ACC] t=%0t start_solver -> WAIT", $time);
+            if (solver_done)
+                $display("[ACC] t=%0t solver_done singular_err=%b valid_out=%b",
+                         $time, singular_err, valid_out);
+        end
+    end
+`endif
+
+    // ----------------------------------------------------------------------------
     // Assertions
     // ----------------------------------------------------------------------------
     initial begin

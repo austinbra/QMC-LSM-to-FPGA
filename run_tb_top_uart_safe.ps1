@@ -6,7 +6,8 @@ param(
     [int]$XelabTimeoutSeconds = 600,
     [int]$XsimTimeoutSeconds = 600,
     [switch]$ComputeMode,
-    [switch]$NoCleanup
+    [switch]$NoCleanup,
+    [switch]$DebugAcc  # +define+ACC_DEBUG for accumulator stall diagnosis
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,7 +60,9 @@ $sources = @(
     "tb/tb_top_option_pricer_uart.sv"
 )
 
-$xvlogArgs = @("-nolog", "-sv") + $sources
+$xvlogArgs = @("-nolog", "-sv")
+if ($DebugAcc) { $xvlogArgs += "-d"; $xvlogArgs += "ACC_DEBUG" }
+$xvlogArgs += $sources
 Invoke-ToolWithTimeout -Exe $XvlogExe -Args $xvlogArgs -TimeoutSec $XvlogTimeoutSeconds
 
 if ($ComputeMode) {

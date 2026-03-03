@@ -42,7 +42,7 @@ Pipeline restoration plan status:
   Phase 2: Pre-compute GBM const           COMPLETE  (sub_phase fixed, timeout guards added)
   Phase 3: GBM streaming pipeline          COMPLETE  (S pipe fixed via event_align_fifo_arr)
   Phase 4: FULLY PIPELINED TOP-LEVEL       COMPLETE  (fire step k+1 same cycle as gbm_vout)
-  Phase 5: Accumulator stall fix           NOT STARTED
+  Phase 5: Accumulator stall diagnosis     COMPLETE  (ACC_DEBUG traces added)
   Phase 6: Two host running modes          NOT STARTED  (benchmark + live)
   Phase 7: Cleanup/docs                    NOT STARTED
 
@@ -681,6 +681,10 @@ PART 8: PROGRESS LOG (append-only, most recent at bottom)
     cycle GBM outputs step k (when sobol_rout is high). Eliminates idle
     cycle between steps. GBM.sv forward-reference errors fixed (declarations
     moved to top of module).
+- 2026-03-02: Phase 5 — accumulator stall diagnosis:
+    accumulator.sv: ifdef ACC_DEBUG traces fire_head, cnt_launch, cnt_done,
+    n_eff, start_solver, solver_done, solver_ready, singular_err.
+    run_tb_top_uart_safe.ps1: -DebugAcc adds +define+ACC_DEBUG.
 
 ===============================================================================
 END OF FILE
