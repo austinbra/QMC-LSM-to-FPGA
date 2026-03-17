@@ -117,7 +117,9 @@ module fxlnLUT #(
                 s1_zero          <= (a == '0);
                 s1_int_log2      <= $signed({1'b0, msb_pos}) - $signed(6'(QFRAC));
                 s1_lut_addr      <= a_norm[WIDTH-2 -: LUT_BITS];
-                s1_lut_addr_next <= a_norm[WIDTH-2 -: LUT_BITS] + 1'b1;
+                s1_lut_addr_next <= (&a_norm[WIDTH-2 -: LUT_BITS])
+                                  ? a_norm[WIDTH-2 -: LUT_BITS]
+                                  : a_norm[WIDTH-2 -: LUT_BITS] + 1'b1;
                 s1_sub_frac      <= a_norm[WIDTH-2-LUT_BITS -: SUB_BITS];
             end else begin
                 s1_valid <= 1'b0;

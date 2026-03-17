@@ -27,12 +27,12 @@ module fxInvCDF_ZS #(
 
     // Zelen & Severo constants in Q16.16 (precomputed to avoid 32-bit overflow)
     // z = t - (c0 + c1*t + c2*t^2) / (1 + d1*t + d2*t^2 + d3*t^3)
-    localparam signed [WIDTH-1:0] C0 = 32'sd164889;  // 2.515517 * 65536
-    localparam signed [WIDTH-1:0] C1 = 32'sd52603;   // 0.802853 * 65536
-    localparam signed [WIDTH-1:0] C2 = 32'sd677;     // 0.010328 * 65536
-    localparam signed [WIDTH-1:0] D1 = 32'sd93896;   // 1.432788 * 65536
-    localparam signed [WIDTH-1:0] D2 = 32'sd12404;   // 0.189269 * 65536
-    localparam signed [WIDTH-1:0] D3 = 32'sd86;      // 0.001308 * 65536
+    localparam signed [WIDTH-1:0] C0 = 32'sd164857;  // round(2.515517 * 65536)
+    localparam signed [WIDTH-1:0] C1 = 32'sd52615;   // round(0.802853 * 65536)
+    localparam signed [WIDTH-1:0] C2 = 32'sd677;     // round(0.010328 * 65536)
+    localparam signed [WIDTH-1:0] D1 = 32'sd93899;   // round(1.432788 * 65536)
+    localparam signed [WIDTH-1:0] D2 = 32'sd12404;   // round(0.189269 * 65536)
+    localparam signed [WIDTH-1:0] D3 = 32'sd86;      // round(0.001308 * 65536)
 
     localparam signed [WIDTH-1:0] ONE = fpga_cfg_pkg::FP_ONE;
 
