@@ -96,3 +96,6 @@ xelab.pb
 
 # Vivado runtime text dumps
 dfx_runtime.txt
+
+# Simulation debug traces
+*_trace.txt

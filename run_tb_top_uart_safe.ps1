@@ -2,7 +2,7 @@ param(
     [string]$XvlogExe = "xvlog",
     [string]$XelabExe = "xelab",
     [string]$XsimExe = "xsim",
-    [int]$XvlogTimeoutSeconds = 900,
+    [int]$XvlogTimeoutSeconds = 1800,
     [int]$XelabTimeoutSeconds = 600,
     [int]$XsimTimeoutSeconds = 600,
     [switch]$ComputeMode,
@@ -82,15 +82,9 @@ if ($DebugAcc) { $baseArgs += "-d"; $baseArgs += "ACC_DEBUG" }
 if ($DebugFsm) { $baseArgs += "-d"; $baseArgs += "TOP_FSM_DEBUG" }
 if ($DebugReg) { $baseArgs += "-d"; $baseArgs += "REG_DEBUG" }
 
-# Compile in batches to avoid timeout (6 files per batch, ~60s per batch)
-$batchSize = 6
-$perBatchTimeout = [Math]::Max(180, [Math]::Ceiling($XvlogTimeoutSeconds / ([Math]::Ceiling($sources.Count / $batchSize))))
-for ($i = 0; $i -lt $sources.Count; $i += $batchSize) {
-    $batch = $sources[$i..([Math]::Min($i + $batchSize - 1, $sources.Count - 1))]
-    $xvlogArgs = $baseArgs + $batch
-    Write-Host "xvlog batch $([Math]::Floor($i / $batchSize) + 1)/$([Math]::Ceiling($sources.Count / $batchSize)) ($($batch.Count) files)"
-    Invoke-ToolWithTimeout -Exe $XvlogExe -Args $xvlogArgs -TimeoutSec $perBatchTimeout
-}
+# Single xvlog invocation (batched mode caused timeouts on heavy LUT modules)
+Write-Host "xvlog ($($sources.Count) files)"
+Invoke-ToolWithTimeout -Exe $XvlogExe -Args ($baseArgs + $sources) -TimeoutSec $XvlogTimeoutSeconds
 
 if ($Multibatch) {
     $top = "work.tb_top_option_pricer_uart_multibatch"

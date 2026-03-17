@@ -33,7 +33,7 @@ module top_mc_option_pricer #(
 );
     localparam int W  = fpga_cfg_pkg::FP_WIDTH;
     localparam int QF = fpga_cfg_pkg::FP_QFRAC;
-    localparam signed [W-1:0] ONE_Q = 1'sd1 <<< QF;
+    localparam signed [W-1:0] ONE_Q = 32'sd1 <<< QF;
 
     // =========================================================================
     // UART I/O
@@ -77,6 +77,7 @@ module top_mc_option_pricer #(
         ST_INIT_DT,
         ST_INIT_GBM_CONST,
         ST_INIT_DISC,
+        ST_INIT_INV_K,
         ST_INIT_DISC_TOTAL,
         ST_TRAIN_STEP,
         ST_TRAIN_FEED,
@@ -100,6 +101,8 @@ module top_mc_option_pricer #(
     logic signed [W-1:0] vol_sqrt_dt_reg;
     logic signed [W-1:0] disc_reg;
     logic signed [W-1:0] disc_total_reg;
+    logic signed [W-1:0] inv_K_reg;      // 1/K for moneyness normalization
+    logic signed [W-1:0] s_norm_reg;     // s_exercise / K
 
     // Path/step counters
     logic [15:0]         path_idx;
@@ -219,12 +222,15 @@ module top_mc_option_pricer #(
         .direction (sobol_direction)
     );
 
+    logic signed [W-1:0] sobol_q16;
+    assign sobol_q16 = $signed({16'd0, sobol_out[31:16]});  // Q0.32 → Q16.16
+
     inverseCDF u_inv (
         .clk       (clk_100),
         .rst_n     (rst_btn_n),
         .valid_in  (sobol_vout),
         .ready_out (inv_rout),
-        .u_in      ($signed(sobol_out)),
+        .u_in      (sobol_q16),
         .valid_out (inv_vout),
         .ready_in  (gbm_rout),
         .z_out     (inv_z)
@@ -282,6 +288,7 @@ module top_mc_option_pricer #(
         .ready_in    (lsm_rin),
         .ready_out   (lsm_rout),
         .S_t         (s_exercise),
+        .s_norm      (s_norm_reg),
         .beta        (beta_reg),
         .strike      (lat_K),
         .cont_value  (acc_y),
@@ -331,6 +338,8 @@ module top_mc_option_pricer #(
             vol_sqrt_dt_reg <= '0;
             disc_reg        <= '0;
             disc_total_reg  <= '0;
+            inv_K_reg       <= '0;
+            s_norm_reg      <= '0;
             sub_phase        <= '0;
             disc_pow_cnt    <= '0;
             sobol_accepted  <= 1'b0;
@@ -495,7 +504,26 @@ module top_mc_option_pricer #(
                     disc_total_reg <= util_div_result;
                     disc_pow_cnt   <= 8'd1;
                     sub_phase       <= '0;
-                    state          <= (lat_M <= 2) ? ST_TRAIN_STEP : ST_INIT_DISC_TOTAL;
+                    state          <= ST_INIT_INV_K;
+                end
+            end
+
+            // =================================================================
+            // INIT_INV_K: compute inv_K = 1/K for moneyness normalization
+            // =================================================================
+            ST_INIT_INV_K: begin
+                if (core_timeout)
+                    state <= ST_DONE;
+                else if (sub_phase == 0 && util_div_rout) begin
+                    util_div_num <= ONE_Q;
+                    util_div_den <= lat_K;
+                    util_div_vin <= 1'b1;
+                    sub_phase     <= 3'd1;
+                end
+                else if (sub_phase == 1 && util_div_vout) begin
+                    inv_K_reg <= util_div_result;
+                    sub_phase  <= '0;
+                    state     <= (lat_M <= 2) ? ST_TRAIN_STEP : ST_INIT_DISC_TOTAL;
                 end
             end
 
@@ -565,21 +593,30 @@ module top_mc_option_pricer #(
             end
 
             // =================================================================
-            // TRAIN_FEED: compute cont_value = disc * terminal_payoff, feed accumulator
+            // TRAIN_FEED: cont_value = disc * terminal_payoff,
+            //             s_norm = s_exercise * inv_K, feed accumulator
             // =================================================================
             ST_TRAIN_FEED: begin
                 if (core_timeout)
                     state <= ST_DONE;
+                // sub 0: fire disc * terminal_payoff
                 else if (sub_phase == 0 && util_mul_rout) begin
                     util_mul_a   <= disc_reg;
                     util_mul_b   <= terminal_payoff;
                     util_mul_vin <= 1'b1;
                     sub_phase     <= 3'd1;
                 end
-                // sub 1: feed accumulator
+                // sub 1: store cont_value, fire s_exercise * inv_K
                 else if (sub_phase == 1 && util_mul_vout) begin
-                    acc_x  <= s_exercise;
-                    acc_y  <= util_mul_result;
+                    acc_y        <= util_mul_result;
+                    util_mul_a   <= s_exercise;
+                    util_mul_b   <= inv_K_reg;
+                    util_mul_vin <= 1'b1;
+                    sub_phase     <= 3'd2;
+                end
+                // sub 2: store s_norm, feed accumulator
+                else if (sub_phase == 2 && util_mul_vout) begin
+                    acc_x  <= util_mul_result;   // normalized S/K
                     if (acc_rout) begin
                         acc_vin  <= 1'b1;
                         path_idx <= path_idx + 1'b1;
@@ -650,37 +687,43 @@ module top_mc_option_pricer #(
             end
 
             // =================================================================
-            // DECIDE_FEED: compute cont_value, drive lsm_decision, accumulate PV
+            // DECIDE_FEED: cont_value, s_norm, drive lsm_decision, accumulate PV
             // =================================================================
             ST_DECIDE_FEED: begin
                 if (core_timeout)
                     state <= ST_DONE;
+                // sub 0: fire disc * terminal_payoff
                 else if (sub_phase == 0 && util_mul_rout) begin
                     util_mul_a   <= disc_reg;
                     util_mul_b   <= terminal_payoff;
                     util_mul_vin <= 1'b1;
                     sub_phase     <= 3'd1;
                 end
-                // sub 1: drive lsm_decision
+                // sub 1: store cont_value, fire s_exercise * inv_K
                 else if (sub_phase == 1 && util_mul_vout) begin
-                    // acc_y doubles as the cont_value wire to lsm_decision
-                    acc_y <= util_mul_result;
+                    acc_y        <= util_mul_result;
+                    util_mul_a   <= s_exercise;
+                    util_mul_b   <= inv_K_reg;
+                    util_mul_vin <= 1'b1;
+                    sub_phase     <= 3'd2;
+                end
+                // sub 2: store s_norm, drive lsm_decision
+                else if (sub_phase == 2 && util_mul_vout) begin
+                    s_norm_reg <= util_mul_result;
                     if (lsm_rout) begin
                         lsm_vin  <= 1'b1;
-                        sub_phase <= 3'd2;
+                        sub_phase <= 3'd3;
                     end
                 end
-                // sub 2: wait for lsm_decision output
-                else if (sub_phase == 2 && lsm_vout) begin
-                    // PV from lsm is the cashflow at the exercise date (step M-1).
-                    // Discount to t=0: PV_0 = disc_total * PV_exercise
+                // sub 3: wait for lsm_decision output
+                else if (sub_phase == 3 && lsm_vout) begin
                     util_mul_a   <= disc_total_reg;
                     util_mul_b   <= lsm_pv;
                     util_mul_vin <= 1'b1;
-                    sub_phase     <= 3'd3;
+                    sub_phase     <= 3'd4;
                 end
-                // sub 3: accumulate discounted PV
-                else if (sub_phase == 3 && util_mul_vout) begin
+                // sub 4: accumulate discounted PV
+                else if (sub_phase == 4 && util_mul_vout) begin
                     sum_pv   <= sum_pv + {{(64-W){util_mul_result[W-1]}}, util_mul_result};
                     path_idx <= path_idx + 1'b1;
                     sub_phase <= '0;
@@ -750,9 +793,9 @@ module top_mc_option_pricer #(
                      $time, state, sub_phase, path_idx, step_idx, cycle_counter,
                      inv_vout, gbm_vout);
         end
-        if (core_active && cycle_counter == 64'd100)
-            $display("[TOP-INIT] dt=%h disc=%h disc_total=%h lat_M=%0d lat_N=%0d",
-                     dt_reg, disc_reg, disc_total_reg, lat_M, lat_N);
+        if (core_active && cycle_counter == 64'd200)
+            $display("[TOP-INIT] dt=%h disc=%h disc_total=%h inv_K=%h lat_M=%0d lat_N=%0d",
+                     dt_reg, disc_reg, disc_total_reg, inv_K_reg, lat_M, lat_N);
         if (acc_vin)
             $display("[ACC-IN] t=%0t x=%h y=%h path=%0d", $time, acc_x, acc_y, path_idx);
         if (acc_vout)

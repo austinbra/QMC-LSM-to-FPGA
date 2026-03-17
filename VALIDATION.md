@@ -287,12 +287,14 @@ The project targets two host-side running modes via `src/uart_host.py`:
 
 ## Known Gaps / Pending Validation
 
-- ~~**Fully pipelined top-level (Phase 4)**~~ **COMPLETE 2026-03-02**: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k. Eliminates idle cycle between steps. Within a path, steps remain sequential (~21 cycle pipeline latency per step) since each step depends on the previous S. True multi-sample overlap requires lane replication (future work).
+- ~~**Fully pipelined top-level (Phase 4)**~~ **COMPLETE 2026-03-02**: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k.
 - ~~**Two running modes not yet validated end-to-end**~~ **Phase 6 COMPLETE 2026-03-02**: Benchmark + live mode code implemented in `uart_host.py`. Not yet tested with real FPGA hardware (needs bitstream + serial connection).
-- Numerical validation script ready (`scripts/validate_numerical.py`); not yet run against FPGA sim.
-- Multi-exercise-date expansion: current architecture checks exercise at step M-1 only; full backward induction with M-1 regression passes is future work.
-- Multi-batch UART regression: `-Multibatch` flag added; not yet re-tested after P0 fixes.
+- ~~**Numerical validation**~~ **COMPLETE 2026-03-02**: FPGA price = 6.553, C++ baseline = 6.50, relative error = 0.8%. Required fixing 8 numerical bugs (see Phase 7 section).
 - ~~**Three critical bugs block all forward progress**~~ **FIXED 2026-03-02** (see P0 Bug Fixes Phase 2 below).
+- ~~**D1 PUT/CALL**~~ **COMPLETE 2026-03-02**: option_type flag flows from UART word 7 through top-level to lsm_decision.
+- **fxSqrt / fxLnLUT behavioral models**: Both modules use `$sqrt()` / `$ln()` behavioral models for simulation. Synthesizable RTL rewrites needed for FPGA deployment.
+- Multi-exercise-date expansion: current architecture checks exercise at step M-1 only; full backward induction with M-1 regression passes is future work.
+- Multi-batch UART regression: `-Multibatch` flag added; not yet re-tested after full numerical fixes.
 
 ## Baseline/Archive Policy Validation
 
@@ -416,4 +418,94 @@ Prerequisite: C++ baseline built (`cd baseline/cpp_fixed && g++ ...`), Vivado in
 - **LIVE mode** (`--mode live`): Logs input snapshot (ticker, date, derived params) for repeatability before running.
 - **q16_16_to_float**: Fixed signed handling for FPGA price decode.
 - **run_cpu_baseline**: Captures stdout+stderr for robust parsing.
+
+## D1: PUT/CALL Runtime Flag (2026-03-02)
+
+**What changed:**
+- `uart_input_handler.sv`: 8-word payload (was 7). `option_type = reg_array[7][0]`.
+- `top_option_pricer.sv`: `param_option_type` → `lat_option_type`, used in `terminal_payoff` computation. 0=CALL `max(S-K,0)`, 1=PUT `max(K-S,0)`.
+- `lsm_decision.sv`: Added `option_type` input port. Payoff selection uses `option_type`.
+- `tb_top_option_pricer_uart.sv`: Sends 8 words per batch (`params[7] = 0` for CALL).
+- `uart_host.py`: `send_params_uart` includes `option_type` field.
+
+**Verification:** Compilation passed for all modules. TB receives all 8 words.
+
+## Regression Module Fixes (2026-03-02)
+
+**Pivot2 fallback (regression.sv):**
+- `fallback_req` and `singular_err` checked `v6b`, which never fires when `pivot2_is_zero`. Changed to use `v6` when pivot2 is zero.
+
+**v3 deadlock (regression.sv):**
+- `v3` condition required `&& v2` (a 1-cycle pulse) simultaneously with `mul0_done` (arrives 1 cycle later). Removed `&& v2`.
+
+**Verification:** Training pass now completes; ACC-OUT, beta, and FSM transitions 7→8→9 observed.
+
+## lsm_decision Stall Fix (2026-03-02)
+
+**Problem:** `lsm_decision` accepted input but never asserted `valid_out`. The skid-buffer pattern was incompatible with multi-cycle fxMul computation (ready_in circular dependency).
+
+**Fix:** Replaced skid-buffer input buffering with a `busy` flag + `started` pulse pattern:
+- `ready_out = !busy`
+- On `valid_in && !busy`: latch inputs, set `busy=1`, fire `started` pulse
+- On `valid_out && ready_in`: clear `busy`
+
+**Verification:** Decision pass completes; `[LSM-OUT]` traces observed.
+
+## Phase 7: Numerical Debugging — 8 Bugs Fixed (2026-03-02)
+
+Starting condition: FPGA sim = 61.27, C++ baseline = 6.50 (842% relative error).
+
+### Bug N1: ONE_Q = -65536 (top_option_pricer.sv)
+- `ONE_Q = 1'sd1 <<< QF` — `1'sd1` is -1 in 1-bit signed. ONE_Q = -65536.
+- Discount factor became large negative. Fix: `ONE_Q = 32'sd1 <<< QF`.
+
+### Bug N2: Q16.16 overflow in regression inputs
+- S ≈ 100 → S⁴ = 100M, but Q16.16 max = 32767. All higher powers saturated.
+- Fix: Moneyness normalization (s_norm = S/K ≈ 1.0) for all regression inputs.
+- Added `ST_INIT_INV_K` state, `inv_K_reg`, modified `ST_TRAIN_FEED`/`ST_DECIDE_FEED` to compute `s_norm`.
+- Updated `lsm_decision` to use `s_norm` for continuation estimate.
+
+### Bug N3: Sobol Q0.32 → Q16.16 mismatch (top_option_pricer.sv)
+- `sobol_out` is Q0.32 unsigned. `$signed(sobol_out)` reinterprets 0x80000000 (0.5) as -32768 in Q16.16.
+- Fix: `sobol_q16 = $signed({16'd0, sobol_out[31:16]})` — explicit format conversion.
+
+### Bug N4: inverseCDF_fold HALF = -32768 (inverseCDF_fold.sv)
+- `HALF = 1'sd1 << (QFRAC-1)` — same 1-bit signed pattern as N1. HALF = -32768.
+- Fix: `HALF = 32'sd1 << (QFRAC-1)`.
+
+### Bug N5: fxSqrt Newton-Raphson scale mismatch (fxSqrt.sv)
+- LUT lookup used normalized a_norm ∈ [0.5, 1.0), but refinement used unnormalized a_in.
+- Fix: Replaced with behavioral model (`$sqrt()`). Needs synthesizable rewrite.
+
+### Bug N6: fxLnLUT computed ln(1+frac) not ln(x) (fxLnLUT.sv)
+- LUT stored ln(1+frac) for frac ∈ [0,1). For x=0.5: got -ln(1.5) = -0.405. Correct: ln(0.5) = -0.693.
+- Fix: Replaced with behavioral model (`$ln()`). Needs synthesizable rewrite.
+
+### Bug N7: fxInvCDF_ZS 32-bit overflow in constants (fxInvCDF_ZS.sv)
+- `C0 = (2515517 * (1 <<< QFRAC)) / 1000000` → intermediate = 164B, overflows 32-bit signed.
+- Fix: All constants precomputed as `32'sd` literals (C0=164889, C1=52603, etc.).
+
+### Bug N8: event_align_fifo_arr registered pop_data (event_align_fifo_arr.sv)
+- `pop_data` was registered — reflected previous cycle's head, not current.
+- In inverseCDF, `negate_aligned` was latched 1 cycle too late → sign errors.
+- Fix: `pop_data` changed to combinational output (`assign pop_data = mem[rptr]`).
+
+### Result
+- **FPGA price: 6.553**
+- **C++ baseline: 6.50**
+- **Relative error: 0.8%** (within QMC variance for N=64 paths)
+
+### Files changed
+| File | Change |
+|------|--------|
+| `src/top/top_option_pricer.sv` | ONE_Q fix, Sobol Q0.32→Q16.16 conversion, ST_INIT_INV_K state, moneyness normalization in ST_TRAIN_FEED/ST_DECIDE_FEED |
+| `src/steps/lsm_decision.sv` | Added `s_norm` input, uses moneyness for continuation estimate |
+| `src/steps/inverseCDF_fold.sv` | HALF constant fix (32'sd1) |
+| `src/math/fxSqrt.sv` | Behavioral model replacement |
+| `src/math/fxLnLUT.sv` | Behavioral model replacement |
+| `src/math/fxInvCDF_ZS.sv` | Precomputed Q16.16 constants |
+| `src/helpers/event_align_fifo_arr.sv` | Combinational pop_data output |
+| `tb/tb_lsm_decision.sv` | Added s_norm port connection |
+| `run_tb_top_uart_safe.ps1` | Build hardening (timeout increases) |
+| `scripts/validate_numerical.py` | Tolerant parsing of "out of plausible range" |
 

@@ -25,16 +25,16 @@ module fxInvCDF_ZS #(
     output logic signed [WIDTH-1:0] z
 );
 
-    // Constants (Zelen & Severo rational approximation)
-    localparam signed [WIDTH-1:0] C0 = (2515517 * (1 <<< QFRAC)) / 1000000;
-    localparam signed [WIDTH-1:0] C1 = (802853 * (1 <<< QFRAC)) / 1000000;
-    localparam signed [WIDTH-1:0] C2 = (10328 * (1 <<< QFRAC)) / 1000000;
+    // Zelen & Severo constants in Q16.16 (precomputed to avoid 32-bit overflow)
+    // z = t - (c0 + c1*t + c2*t^2) / (1 + d1*t + d2*t^2 + d3*t^3)
+    localparam signed [WIDTH-1:0] C0 = 32'sd164889;  // 2.515517 * 65536
+    localparam signed [WIDTH-1:0] C1 = 32'sd52603;   // 0.802853 * 65536
+    localparam signed [WIDTH-1:0] C2 = 32'sd677;     // 0.010328 * 65536
+    localparam signed [WIDTH-1:0] D1 = 32'sd93896;   // 1.432788 * 65536
+    localparam signed [WIDTH-1:0] D2 = 32'sd12404;   // 0.189269 * 65536
+    localparam signed [WIDTH-1:0] D3 = 32'sd86;      // 0.001308 * 65536
 
-    localparam signed [WIDTH-1:0] D1 = (1 <<< QFRAC) + ((432788 * (1 <<< QFRAC)) / 1000000);
-    localparam signed [WIDTH-1:0] D2 = (189269 * (1 <<< QFRAC)) / 1000000;
-    localparam signed [WIDTH-1:0] D3 = (1308 * (1 <<< QFRAC)) / 1000000;
-
-    localparam signed [WIDTH-1:0] ONE = 1 <<< QFRAC;
+    localparam signed [WIDTH-1:0] ONE = 32'sd1 <<< QFRAC;
 
     // Pipeline processes one sample at a time.
     // in_flight prevents accepting a new sample until the current one completes.

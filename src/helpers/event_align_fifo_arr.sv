@@ -40,13 +40,16 @@ module event_align_fifo_arr #(
     assign full  = (count == DEPTH[AW:0]);
     assign empty = (count == '0);
 
+    // Combinational read: pop_data always reflects head of queue
+    for (genvar g = 0; g < N; g++)
+        assign pop_data[g] = mem[rptr][g];
+
     integer i;
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wptr  <= '0;
             rptr  <= '0;
             count <= '0;
-            for (i = 0; i < N; ++i) pop_data[i] <= '0;
         end else begin
             unique case ({push_en, pop_en})
                 2'b10: begin
@@ -55,19 +58,14 @@ module event_align_fifo_arr #(
                     count <= count + 1'b1;
                 end
                 2'b01: begin
-                    for (i = 0; i < N; ++i) pop_data[i] <= mem[rptr][i];
                     rptr  <= inc_ptr(rptr);
                     count <= count - 1'b1;
                 end
                 2'b11: begin
-                    // concurrent push & pop: present current rptr, write next at wptr
-                    for (i = 0; i < N; ++i) begin
-                        pop_data[i]  <= mem[rptr][i];
+                    for (i = 0; i < N; ++i)
                         mem[wptr][i] <= push_data[i];
-                    end
                     rptr <= inc_ptr(rptr);
                     wptr <= inc_ptr(wptr);
-                    // count unchanged
                 end
                 default: ;
             endcase

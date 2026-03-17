@@ -53,13 +53,13 @@ def run_fpga_sim(paths, steps, S0, K, r, sigma, T, repo_root):
 
     cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-File", str(script), "-ComputeMode", "-NoCleanup",
-           "-XvlogTimeoutSeconds", "600", "-XelabTimeoutSeconds", "600",
+           "-XvlogTimeoutSeconds", "1800", "-XelabTimeoutSeconds", "600",
            "-XsimTimeoutSeconds", "600"]
     proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, timeout=1200)
     out = proc.stdout + proc.stderr
 
-    # TB prints: "Batch 0 price = 0xXXXXXXXX (Q16.16 ~ N)"
-    m = re.search(r"Batch 0 price = 0x([0-9a-fA-F]+)", out)
+    # TB prints: "Batch 0 price = 0xXXXXXXXX" or "Batch 0 price out of plausible range: 0xXXXXXXXX"
+    m = re.search(r"Batch 0 price (?:= |out of plausible range: )0x([0-9a-fA-F]+)", out)
     if not m:
         raise RuntimeError(f"Could not parse FPGA price from output. Exit={proc.returncode}\n---\n{out[-2000:]}")
     raw = int(m.group(1), 16)

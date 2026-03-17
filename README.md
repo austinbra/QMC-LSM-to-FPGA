@@ -15,7 +15,7 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 ## Validation And Status
 - Validation log: `VALIDATION.md` (commands run, results, known gaps).
 - Active implementation tracker: `whats_next.md`.
-- Current state: Pipeline stages (Sobol, InverseCDF, GBM, Accumulator, Regression, LSM Decision) are implemented with ready/valid + skid buffers. Top-level two-pass LSMC engine compiles/elaborates clean. Phase 4 streaming overlap is implemented (fire step k+1 same cycle as GBM output).
+- Current state: Pipeline stages (Sobol, InverseCDF, GBM, Accumulator, Regression, LSM Decision) are implemented with ready/valid + skid buffers. Top-level two-pass LSMC engine compiles/elaborates clean. Numerical validation achieved 0.8% relative error vs C++ baseline (FPGA 6.553 vs C++ 6.50).
 
 ---
 
@@ -23,7 +23,7 @@ This allows direct comparison of **accuracy** and **performance** between CPU an
 - **Fully pipelined streaming datapath** with skid buffers at every stage boundary:  
   Sobol → Inverse CDF (Zelen–Severo rational approx) → GBM path simulation → Accumulator → Regression (Gaussian elimination) → LSM decision → UART output.  
   Multiple samples in-flight simultaneously; backpressure propagates through ready/valid handshaking without data loss.
-- **Fixed‑point math** (default Q16.16) with LUT‑based exp/ln/sqrt and Newton–Raphson refinement.
+- **Fixed‑point math** (default Q16.16) with LUT‑based exp, behavioral ln/sqrt models (simulation), and moneyness normalization to prevent overflow.
 - **Two running modes** (host-side via `src/uart_host.py`):
   - **Benchmark**: CPU vs FPGA side-by-side with identical parameters; reports price, cycles, wall time, speedup.
   - **Live**: Fetches real market data from Yahoo Finance, derives S0/sigma, runs pricing with live parameters.
@@ -40,16 +40,16 @@ The design is a **fully pipelined, streaming datapath** with ready/valid handsha
 
 - **Sobol generator**: Gray‑coded XOR tree with BRAM‑stored direction numbers. Skid-buffered output.
 - **Inverse CDF** (~15 cycles):  
-  - Fold U(0,1) to (0,0.5] with negate flag (event-alignment FIFO for negate).
-  - ln LUT + multiply by −2 + sqrt → t.  
-  - Zelen–Severo rational polynomial → z‑score.  
+  - Fold U(0,1) to (0,0.5] with negate flag (event-alignment FIFO for negate, combinational read).
+  - ln + multiply by −2 + sqrt → t.  (ln and sqrt are behavioral models for simulation; synthesizable rewrites pending.)
+  - Zelen–Severo rational polynomial (precomputed Q16.16 constants) → z‑score.  
 - **GBM step** (~5 cycles, streaming pipeline with input skid buffer):  
   MUL1(vol_sqrt_dt × z) → ADD + saturate → EXP(signed LUT) → MUL2(S × exp).  
   Pre-computed constants (`drift_const`, `vol_sqrt_dt`) eliminate per-sample sqrt/mul overhead.
 - **Accumulator** (O(1) memory, no path storage):  
-  Collects 8 running sufficient statistics [Σ1, ΣS, ΣS², ΣS³, ΣS⁴, Σy, ΣSy, ΣS²y] in 64‑bit registers. Paths are consumed and reduced immediately — no N‑sized buffer exists anywhere. This is what makes the design feasible on a memory‑constrained Spartan‑7.
+  Collects 8 running sufficient statistics [Σ1, ΣS, ΣS², ΣS³, ΣS⁴, Σy, ΣSy, ΣS²y] in 64‑bit registers using moneyness-normalized inputs (S/K ≈ 1.0) to prevent Q16.16 overflow. Paths are consumed and reduced immediately — no N‑sized buffer exists anywhere.
 - **Regression**: Deeply pipelined Gaussian elimination with pivoting; fallback to mean payoff if singular.  
-- **LSM decision**: Chooses between immediate exercise payoff and discounted continuation value.  
+- **LSM decision**: Chooses between immediate exercise payoff and regression-estimated continuation value. Uses moneyness (S/K) for the continuation polynomial to keep inputs in Q16.16 range. Supports PUT/CALL via `option_type` flag.  
 - **UART interface**: Streams results to host. Result packet: marker `0xABCD0001` + price + cycle count (lo/hi).
 
 ---
@@ -108,10 +108,13 @@ Two host-side modes are supported via `src/uart_host.py`:
 
 ### Current status
 - Top-level two-pass LSMC engine compiles and elaborates clean.
-- Three critical bugs fixed (sub_phase overflow, GBM S pipeline misalignment, InvCDF C0 constant).
-- Phase 4 complete: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k (zero idle cycles between steps).
+- **Numerical validation passed**: FPGA price = 6.553 vs C++ baseline = 6.50 (**0.8% relative error**).
+- 8 numerical bugs fixed in Phase 7 (see `VALIDATION.md` for details).
+- PUT/CALL runtime flag implemented (D1 complete).
+- Phase 4 complete: FSM fires Sobol for step k+1 in the same cycle GBM outputs step k.
 - Phase 6 complete: benchmark + live host modes in `uart_host.py`.
-- Next: numerical validation (`python scripts/validate_numerical.py`), FPGA hardware testing.
+- **Note**: `fxSqrt` and `fxLnLUT` use behavioral models (`$sqrt`/`$ln`) for simulation. Synthesizable RTL rewrites needed for FPGA deployment.
+- Next: synthesizable math module rewrites, richer error reporting (D2), FPGA hardware testing.
 
 ---
 
@@ -136,14 +139,16 @@ Two host-side modes are supported via `src/uart_host.py`:
 - [x] Top‑level two-pass LSMC integration with UART I/O.
 - [x] **Phase 4: Fully pipelined top-level** — fire Sobol for step k+1 in same cycle as GBM output.
 - [x] Two running modes: benchmark (CPU vs FPGA comparison) + live (Yahoo Finance data).
-- [ ] PUT/CALL runtime flag (trivial: swap payoff direction, ~10 lines of RTL).
+- [x] PUT/CALL runtime flag (D1) — 1-bit option_type through UART, top-level, and lsm_decision.
+- [x] **Numerical validation**: FPGA 6.553 vs C++ 6.50 = 0.8% error (8 bugs fixed in Phase 7).
+- [ ] Synthesizable fxSqrt rewrite (currently behavioral `$sqrt` model).
+- [ ] Synthesizable fxLnLUT rewrite (currently behavioral `$ln` model).
 - [ ] Richer error reporting in result packet (timeout, singular regression, saturation flags).
-- [ ] Numerical validation: `python scripts/validate_numerical.py` (paths=64, steps=12).
 - [ ] Antithetic variates (run z and −z per Sobol point, halves variance for free).
 - [ ] Lane replication (NUM_LANES > 1) for throughput scaling.
 - [ ] Multi-exercise-date expansion (full backward induction).
 
-> :warning: Active development — Phases 1-6 complete. See `whats_next.md` for full status.
+> :warning: Active development — Phases 1-7 complete. fxSqrt/fxLnLUT need synthesizable rewrites for FPGA deployment. See `whats_next.md` for full status.
 
 ---
 
