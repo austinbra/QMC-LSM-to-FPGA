@@ -165,8 +165,7 @@ module regression #(
     generate
         for (genvar g = 0; g < 4; ++g) begin : DIV0
             logic signed [2*WIDTH-1:0] num64_ext0;
-            assign num64_ext0 = $signed({{WIDTH{mat1[0][g][WIDTH-1]}}, mat1[0][g]})
-                                <<< QFRAC;
+            assign num64_ext0 = $signed({{WIDTH{mat1[0][g][WIDTH-1]}}, mat1[0][g]}) <<< QFRAC;
             assign div0_num[g] = num64_ext0[WIDTH+QFRAC-1 : QFRAC];
             assign div0_den[g] = mat1[0][0];
             fxDiv #() d0 (

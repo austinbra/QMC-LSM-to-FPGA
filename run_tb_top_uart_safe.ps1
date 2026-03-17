@@ -2,7 +2,7 @@ param(
     [string]$XvlogExe = "xvlog",
     [string]$XelabExe = "xelab",
     [string]$XsimExe = "xsim",
-    [int]$XvlogTimeoutSeconds = 600,
+    [int]$XvlogTimeoutSeconds = 900,
     [int]$XelabTimeoutSeconds = 600,
     [int]$XsimTimeoutSeconds = 600,
     [switch]$ComputeMode,
@@ -40,8 +40,10 @@ function Invoke-ToolWithTimeout {
         $err = Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue
         if ($out) { Write-Output $out }
         if ($err) { Write-Output $err }
-        if ($proc.ExitCode -ne 0) {
-            throw "$Exe failed with exit code $($proc.ExitCode)"
+        # ExitCode can be null with Start-Process on some Windows setups; only fail on definite non-zero
+        $ec = $proc.ExitCode
+        if ($null -ne $ec -and $ec -ne 0) {
+            throw "$Exe failed with exit code $ec"
         }
     } finally {
         Remove-Item $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
@@ -75,12 +77,20 @@ $sources = @(
     "tb/tb_top_option_pricer_uart.sv"
 )
 
-$xvlogArgs = @("-nolog", "-sv")
-if ($DebugAcc) { $xvlogArgs += "-d"; $xvlogArgs += "ACC_DEBUG" }
-if ($DebugFsm) { $xvlogArgs += "-d"; $xvlogArgs += "TOP_FSM_DEBUG" }
-if ($DebugReg) { $xvlogArgs += "-d"; $xvlogArgs += "REG_DEBUG" }
-$xvlogArgs += $sources
-Invoke-ToolWithTimeout -Exe $XvlogExe -Args $xvlogArgs -TimeoutSec $XvlogTimeoutSeconds
+$baseArgs = @("-nolog", "-sv")
+if ($DebugAcc) { $baseArgs += "-d"; $baseArgs += "ACC_DEBUG" }
+if ($DebugFsm) { $baseArgs += "-d"; $baseArgs += "TOP_FSM_DEBUG" }
+if ($DebugReg) { $baseArgs += "-d"; $baseArgs += "REG_DEBUG" }
+
+# Compile in batches to avoid timeout (6 files per batch, ~60s per batch)
+$batchSize = 6
+$perBatchTimeout = [Math]::Max(180, [Math]::Ceiling($XvlogTimeoutSeconds / ([Math]::Ceiling($sources.Count / $batchSize))))
+for ($i = 0; $i -lt $sources.Count; $i += $batchSize) {
+    $batch = $sources[$i..([Math]::Min($i + $batchSize - 1, $sources.Count - 1))]
+    $xvlogArgs = $baseArgs + $batch
+    Write-Host "xvlog batch $([Math]::Floor($i / $batchSize) + 1)/$([Math]::Ceiling($sources.Count / $batchSize)) ($($batch.Count) files)"
+    Invoke-ToolWithTimeout -Exe $XvlogExe -Args $xvlogArgs -TimeoutSec $perBatchTimeout
+}
 
 if ($Multibatch) {
     $top = "work.tb_top_option_pricer_uart_multibatch"

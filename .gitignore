@@ -3,6 +3,7 @@
 # -------------------------
 # If  put all your compiled binaries in a folder like /build or /bin:
 build/
+__pycache__/
 bin/
 obj/
 *.o

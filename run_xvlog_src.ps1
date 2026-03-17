@@ -1,7 +1,7 @@
 param(
     [string]$XvlogExe = "xvlog",
     [string]$VivadoExe = "vivado",
-    [int]$TimeoutSeconds = 600,
+    [int]$TimeoutSeconds = 120,
     [switch]$NoCleanup,
     [switch]$UseDirectXvlog  # Use xvlog directly instead of vivado -mode batch (slower startup)
 )

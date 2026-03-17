@@ -27,7 +27,7 @@ def run_cpu_baseline(paths, steps, S0, K, r, sigma, T, baseline_dir):
     cmd = [str(exe), "--paths", str(paths), "--steps", str(steps),
            "--S0", str(S0), "--K", str(K), "--r", str(r),
            "--sigma", str(sigma), "--T", str(T)]
-    proc = subprocess.run(cmd, cwd=baseline_dir, capture_output=True, text=True, check=True)
+    proc = subprocess.run(cmd, cwd=baseline_dir, capture_output=True, text=True, check=True, timeout=60)
     out = proc.stdout + proc.stderr
 
     price_d = None
@@ -52,8 +52,10 @@ def run_fpga_sim(paths, steps, S0, K, r, sigma, T, repo_root):
         raise FileNotFoundError(f"run_tb_top_uart_safe.ps1 not found at {script}")
 
     cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-           "-File", str(script), "-ComputeMode", "-NoCleanup"]
-    proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, timeout=900)
+           "-File", str(script), "-ComputeMode", "-NoCleanup",
+           "-XvlogTimeoutSeconds", "600", "-XelabTimeoutSeconds", "600",
+           "-XsimTimeoutSeconds", "600"]
+    proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, timeout=1200)
     out = proc.stdout + proc.stderr
 
     # TB prints: "Batch 0 price = 0xXXXXXXXX (Q16.16 ~ N)"
@@ -109,7 +111,7 @@ def main():
             repo_root
         )
     except subprocess.TimeoutExpired:
-        print("ERROR: FPGA simulation timed out (15 min)")
+        print("ERROR: FPGA simulation timed out (20 min)")
         sys.exit(1)
     except Exception as e:
         print(f"ERROR: {e}")
