@@ -14,8 +14,8 @@ module tb_fxDiv;
     //  USER-TUNABLE CONSTANTS
     //------------------------------------------------------------------
     localparam int CLK_PERIOD_NS = 10;      // 100 MHz sim clock
-    localparam int WIDTH         = 32;      // must match fxDiv.sv
-    localparam int QFRAC         = 16;
+    localparam int WIDTH         = fpga_cfg_pkg::FP_WIDTH;
+    localparam int QFRAC         = fpga_cfg_pkg::FP_QFRAC;
     localparam int N_VECTORS     = 20;      // number of random tests
     localparam int MAX_WAIT_CYCLES = 2000;
 

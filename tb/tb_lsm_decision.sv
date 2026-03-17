@@ -3,9 +3,9 @@
 module tb_lsm_decision;
 
     // Parameters
-    parameter WIDTH = 32;
-    parameter QINT = 16;
-    parameter QFRAC = 16;
+    localparam int WIDTH = fpga_cfg_pkg::FP_WIDTH;
+    localparam int QINT  = fpga_cfg_pkg::FP_QINT;
+    localparam int QFRAC = fpga_cfg_pkg::FP_QFRAC;
     localparam int MAX_TB_CYCLES = 10000;
 
     // Signals

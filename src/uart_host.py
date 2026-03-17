@@ -108,7 +108,7 @@ def send_params_uart(params, port, baud, timeout_s):
 
         extra = []
         deadline = time.perf_counter() + timeout_s
-        while time.perf_counter() < deadline and len(extra) < 4:
+        while time.perf_counter() < deadline and len(extra) < 5:
             if ser.in_waiting >= 4:
                 extra.append(struct.unpack("<I", ser.read(4))[0])
             else:
@@ -225,7 +225,7 @@ def main():
         for i, val in enumerate(echoes):
             decoded = q16_16_to_float(val) if i >= 2 else val
             print(f"  echo[{i}] raw=0x{val & 0xFFFFFFFF:08X} decoded={decoded}")
-        if len(extra) >= 4 and extra[0] == 0xABCD0001:
+        if len(extra) >= 4 and extra[0] in (0xABCD0001, 0xABCD0002):
             price_raw = int(extra[1])
             fpga_cycles = (int(extra[3]) << 32) | int(extra[2])
             fpga_price = q16_16_to_float(price_raw)
@@ -237,6 +237,15 @@ def main():
                 print(f"[FPGA] compute_time_s={fpga_compute_s:.9f}")
             else:
                 print("[FPGA] compute_time_s = core_cycles / fclk_hz (use --fpga-fclk-hz)")
+            if len(extra) >= 5:
+                status = int(extra[4])
+                flags = []
+                if status & 1:
+                    flags.append("TIMEOUT")
+                if status & 2:
+                    flags.append("SINGULAR_REGRESSION")
+                flag_str = ", ".join(flags) if flags else "OK"
+                print(f"[FPGA] status=0x{status:08X} ({flag_str})")
         elif len(extra) > 0:
             print(f"[FPGA] extra_words={extra} (unexpected format)")
         else:

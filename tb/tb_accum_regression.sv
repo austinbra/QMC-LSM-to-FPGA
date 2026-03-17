@@ -40,7 +40,8 @@ module tb_accum_regression;
     .x_in           (x_in),
     .y_in           (y_in),
     .n_samples_cfg  ('0),
-    .beta           (beta)
+    .beta           (beta),
+    .regression_singular()
   );
 
   // -------------------------

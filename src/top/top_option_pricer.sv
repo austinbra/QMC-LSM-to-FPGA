@@ -33,7 +33,6 @@ module top_mc_option_pricer #(
 );
     localparam int W  = fpga_cfg_pkg::FP_WIDTH;
     localparam int QF = fpga_cfg_pkg::FP_QFRAC;
-    localparam signed [W-1:0] ONE_Q = 32'sd1 <<< QF;
 
     // =========================================================================
     // UART I/O
@@ -44,6 +43,7 @@ module top_mc_option_pricer #(
     logic        param_option_type;
     logic        result_valid;
     logic [31:0] result_price, result_cycles_lo, result_cycles_hi;
+    logic [31:0] result_status;
 
     uart_input_handler #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
@@ -66,7 +66,8 @@ module top_mc_option_pricer #(
         .result_valid    (result_valid),
         .result_price    (result_price),
         .result_cycles_lo(result_cycles_lo),
-        .result_cycles_hi(result_cycles_hi)
+        .result_cycles_hi(result_cycles_hi),
+        .result_status   (result_status)
     );
 
     // =========================================================================
@@ -120,6 +121,11 @@ module top_mc_option_pricer #(
     // Cycle counter
     logic [63:0] cycle_counter;
     logic        core_active;
+
+    // Status flags (sticky, collected during computation)
+    // bit 0: timeout occurred
+    // bit 1: regression singular (fallback to mean payoff)
+    logic [31:0] status_flags;
 
     // =========================================================================
     // Utility multiplier (time-shared across INIT and per-path computations)
@@ -223,7 +229,7 @@ module top_mc_option_pricer #(
     );
 
     logic signed [W-1:0] sobol_q16;
-    assign sobol_q16 = $signed({16'd0, sobol_out[31:16]});  // Q0.32 → Q16.16
+    assign sobol_q16 = $signed({{QF{1'b0}}, sobol_out[W-1:QF]});  // Q0.32 → Q16.16
 
     inverseCDF u_inv (
         .clk       (clk_100),
@@ -259,18 +265,20 @@ module top_mc_option_pricer #(
     logic                    acc_vin, acc_vout, acc_rout, acc_rin;
     logic signed [W-1:0]    acc_x, acc_y;
     logic signed [W-1:0]    acc_beta [0:2];
+    logic                    acc_singular;
 
     accumulator #(.N_SAMPLES(10000)) u_accum (
-        .clk           (clk_100),
-        .rst_n         (rst_btn_n),
-        .valid_in      (acc_vin),
-        .ready_out     (acc_rout),
-        .valid_out     (acc_vout),
-        .ready_in      (acc_rin),
-        .x_in          (acc_x),
-        .y_in          (acc_y),
-        .n_samples_cfg (lat_N[$clog2(10001)-1:0]),
-        .beta          (acc_beta)
+        .clk                (clk_100),
+        .rst_n              (rst_btn_n),
+        .valid_in           (acc_vin),
+        .ready_out          (acc_rout),
+        .valid_out          (acc_vout),
+        .ready_in           (acc_rin),
+        .x_in               (acc_x),
+        .y_in               (acc_y),
+        .n_samples_cfg      (lat_N[$clog2(10001)-1:0]),
+        .beta               (acc_beta),
+        .regression_singular(acc_singular)
     );
     assign acc_rin = 1'b1;
 
@@ -326,6 +334,7 @@ module top_mc_option_pricer #(
             cycle_counter   <= '0;
             result_valid    <= 1'b0;
             result_price    <= '0;
+            status_flags    <= '0;
             batch_ready     <= 1'b1;
             path_idx        <= '0;
             step_idx        <= '0;
@@ -399,6 +408,7 @@ module top_mc_option_pricer #(
                     batch_ready   <= 1'b0;
                     core_active   <= 1'b1;
                     cycle_counter <= '0;
+                    status_flags  <= '0;
                     sub_phase      <= '0;
                     state         <= ST_INIT_DT;
                 end
@@ -494,7 +504,7 @@ module top_mc_option_pricer #(
                     // Since disc = exp(-r*dt) < 1 for r>0, and ExpLUT gives exp(|r*dt|) > 1,
                     // we need the reciprocal.
                     // We'll do a quick div: disc = ONE / exp_result
-                    util_div_num <= ONE_Q;
+                    util_div_num <= fpga_cfg_pkg::FP_ONE;
                     util_div_den <= util_exp_result;
                     util_div_vin <= 1'b1;
                     sub_phase     <= 3'd3;
@@ -515,7 +525,7 @@ module top_mc_option_pricer #(
                 if (core_timeout)
                     state <= ST_DONE;
                 else if (sub_phase == 0 && util_div_rout) begin
-                    util_div_num <= ONE_Q;
+                    util_div_num <= fpga_cfg_pkg::FP_ONE;
                     util_div_den <= lat_K;
                     util_div_vin <= 1'b1;
                     sub_phase     <= 3'd1;
@@ -643,6 +653,8 @@ module top_mc_option_pricer #(
                 end else if (acc_vout) begin
                     for (int i = 0; i < 3; i++)
                         beta_reg[i] <= acc_beta[i];
+                    if (acc_singular)
+                        status_flags[1] <= 1'b1;
                     path_idx       <= '0;
                     step_idx       <= '0;
                     s_curr         <= lat_S0;
@@ -763,8 +775,10 @@ module top_mc_option_pricer #(
             // =================================================================
             ST_DONE: begin
                 result_valid <= 1'b1;
-                if (core_timeout)
-                    result_price <= 32'hDEAD0001;
+                if (core_timeout) begin
+                    result_price     <= 32'hDEAD0001;
+                    status_flags[0]  <= 1'b1;
+                end
                 core_active <= 1'b0;
                 state       <= ST_IDLE;
             end
@@ -780,6 +794,7 @@ module top_mc_option_pricer #(
     // =========================================================================
     assign result_cycles_lo = cycle_counter[31:0];
     assign result_cycles_hi = cycle_counter[63:32];
+    assign result_status    = status_flags;
 
 `ifdef TOP_FSM_DEBUG
     state_t prev_state;

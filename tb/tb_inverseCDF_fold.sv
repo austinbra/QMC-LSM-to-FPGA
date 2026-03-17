@@ -3,10 +3,10 @@
 module tb_inverseCDF_fold;
 
     // Parameters
-    parameter WIDTH = 32;
-    parameter QINT = 16;
-    parameter QFRAC = 16;
-    localparam logic [WIDTH-1:0] HALF = 1 << (QFRAC-1);
+    localparam int WIDTH = fpga_cfg_pkg::FP_WIDTH;
+    localparam int QINT  = fpga_cfg_pkg::FP_QINT;
+    localparam int QFRAC = fpga_cfg_pkg::FP_QFRAC;
+    localparam logic [WIDTH-1:0] HALF = fpga_cfg_pkg::FP_HALF;
     localparam int MAX_TB_CYCLES = 5000;
 
     // Signals

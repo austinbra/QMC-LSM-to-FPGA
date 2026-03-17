@@ -3,9 +3,9 @@
 module tb_accumulator;
 
     // Parameters (match DUT)
-    parameter WIDTH = 32;
-    parameter QINT = 16;
-    parameter QFRAC = 16;
+    localparam int WIDTH = fpga_cfg_pkg::FP_WIDTH;
+    localparam int QINT  = fpga_cfg_pkg::FP_QINT;
+    localparam int QFRAC = fpga_cfg_pkg::FP_QFRAC;
     parameter N_SAMPLES = 10;  // Small for sim speed
     localparam int MAX_TB_CYCLES = 10000;
 
@@ -24,7 +24,8 @@ module tb_accumulator;
         .ready_in(ready_in), .ready_out(ready_out),
         .x_in(x_in), .y_in(y_in),
         .n_samples_cfg('0),
-        .beta(beta)
+        .beta(beta),
+        .regression_singular()
     );
 
     // Clock generation
