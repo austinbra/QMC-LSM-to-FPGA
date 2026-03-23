@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$projectRoot = $PSScriptRoot
+$projectRoot = Split-Path $PSScriptRoot -Parent
 if (-not $projectRoot) { $projectRoot = Get-Location }
 
 function Invoke-ToolWithTimeout {
@@ -28,8 +28,9 @@ function Invoke-ToolWithTimeout {
         cmd /c "taskkill /F /T /PID $($proc.Id)" 2>$null
         throw "$Exe timed out after $TimeoutSec seconds"
     }
-    if ($proc.ExitCode -ne 0) {
-        throw "$Exe failed with exit code $($proc.ExitCode)"
+    $ec = $proc.ExitCode
+    if ($null -ne $ec -and $ec -ne 0) {
+        throw "$Exe failed with exit code $ec"
     }
 }
 

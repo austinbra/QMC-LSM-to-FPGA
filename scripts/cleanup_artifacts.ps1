@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "SilentlyContinue"
+$cleanRoot = Split-Path $PSScriptRoot -Parent
 
 $filePatterns = @(
     "*.log",
@@ -18,7 +19,7 @@ $filePatterns = @(
 
 $removedFiles = 0
 foreach ($pattern in $filePatterns) {
-    $files = Get-ChildItem -Path "." -Filter $pattern -File
+    $files = Get-ChildItem -Path $cleanRoot -Filter $pattern -File
     foreach ($f in $files) {
         Remove-Item -Force $f.FullName
         if (-not $?) { continue }
@@ -30,8 +31,9 @@ foreach ($pattern in $filePatterns) {
 $removedDirs = 0
 if ($IncludeSimDirs) {
     foreach ($d in @("xsim.dir", ".Xil")) {
-        if (Test-Path $d) {
-            Remove-Item -Recurse -Force $d
+        $dPath = Join-Path $cleanRoot $d
+        if (Test-Path $dPath) {
+            Remove-Item -Recurse -Force $dPath
             if ($?) {
                 $removedDirs++
                 if (-not $Quiet) { Write-Host "Removed directory: $d" }

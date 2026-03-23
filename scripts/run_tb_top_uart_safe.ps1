@@ -30,7 +30,7 @@ function Invoke-ToolWithTimeout {
     try {
         $proc = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru -NoNewWindow `
             -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile `
-            -WorkingDirectory $PSScriptRoot
+            -WorkingDirectory (Split-Path $PSScriptRoot -Parent)
         if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
             Write-Warning "Timeout ($TimeoutSec s): killing $Exe (PID=$($proc.Id))"
             cmd /c "taskkill /F /T /PID $($proc.Id)" | Out-Null
