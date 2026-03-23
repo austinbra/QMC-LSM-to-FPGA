@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$projectRoot = $PSScriptRoot
+$projectRoot = Split-Path $PSScriptRoot -Parent
 if (-not $projectRoot) { $projectRoot = Get-Location }
 
 function Invoke-ToolWithTimeout {

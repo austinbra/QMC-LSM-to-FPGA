@@ -70,10 +70,10 @@ The design is a **fully pipelined, streaming datapath** with ready/valid handsha
 
 **Quick compile/simulate (recommended):**
 ```powershell
-./run_xvlog_src.ps1          # Compile (uses vivado -mode batch by default)
-./run_xelab_smoke.ps1       # Elaborate
-./run_tb_top_uart_safe.ps1  # Simulate (timeout mode)
-./run_tb_top_uart_safe.ps1 -ComputeMode  # Simulate (compute mode)
+./scripts/run_xvlog_src.ps1          # Compile (uses vivado -mode batch by default)
+./scripts/run_xelab_smoke.ps1       # Elaborate
+./scripts/run_tb_top_uart_safe.ps1  # Simulate (timeout mode)
+./scripts/run_tb_top_uart_safe.ps1 -ComputeMode  # Simulate (compute mode)
 ```
 
 If scripts time out, ensure Vivado is in PATH. Alternatively run directly:

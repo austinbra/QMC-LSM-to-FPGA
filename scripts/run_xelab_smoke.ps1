@@ -19,7 +19,8 @@ function Invoke-ToolWithTimeout {
     $argString = ($Args | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
     Write-Host "Running: $Exe $argString"
 
-    $proc = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru -NoNewWindow -WorkingDirectory $PSScriptRoot
+    $projectRoot = Split-Path $PSScriptRoot -Parent
+    $proc = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru -NoNewWindow -WorkingDirectory $projectRoot
     if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
         Write-Warning "Timeout ($TimeoutSec s): killing $Exe (PID=$($proc.Id))"
         cmd /c "taskkill /F /T /PID $($proc.Id)" | Out-Null
