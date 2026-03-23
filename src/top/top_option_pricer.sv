@@ -24,7 +24,8 @@ module top_mc_option_pricer #(
     parameter int CLK_FREQ_HZ            = 100_000_000,
     parameter int BAUD_RATE              = 115200,
     parameter int unsigned CORE_MAX_CYCLES = 32'd50_000_000,
-    parameter int MAX_STEPS              = 50
+    parameter int MAX_STEPS              = 50,
+    parameter bit ANTITHETIC_EN          = 1'b1
 )(
     input  logic clk_100,
     input  logic rst_btn_n,
@@ -111,6 +112,11 @@ module top_mc_option_pricer #(
     logic signed [W-1:0] s_curr;
     logic signed [W-1:0] s_exercise;
     logic signed [W-1:0] s_terminal;
+
+    // Antithetic variates: even path_idx = normal, odd = negated z
+    wire                 antithetic = ANTITHETIC_EN & path_idx[0];
+    wire [15:0]          sobol_path = ANTITHETIC_EN ? path_idx[15:1] : path_idx;
+    wire [15:0]          total_paths = ANTITHETIC_EN ? {lat_N[14:0], 1'b0} : lat_N;
 
     // Accumulation for decision pass average
     logic signed [63:0]  sum_pv;
@@ -242,6 +248,9 @@ module top_mc_option_pricer #(
         .z_out     (inv_z)
     );
 
+    // Antithetic: negate z for odd path_idx (flag stable across all steps of a path)
+    wire signed [W-1:0] gbm_z_in = antithetic ? -inv_z : inv_z;
+
     GBM u_gbm (
         .clk         (clk_100),
         .rst_n       (rst_btn_n),
@@ -249,7 +258,7 @@ module top_mc_option_pricer #(
         .ready_out   (gbm_rout),
         .valid_out   (gbm_vout),
         .ready_in    (pipe_ready_in),
-        .z           (inv_z),
+        .z           (gbm_z_in),
         .S           (s_curr),
         .drift_const (drift_const_reg),
         .vol_sqrt_dt (vol_sqrt_dt_reg),
@@ -276,7 +285,7 @@ module top_mc_option_pricer #(
         .ready_in           (acc_rin),
         .x_in               (acc_x),
         .y_in               (acc_y),
-        .n_samples_cfg      (lat_N[$clog2(10001)-1:0]),
+        .n_samples_cfg      (total_paths[$clog2(10001)-1:0]),
         .beta               (acc_beta),
         .regression_singular(acc_singular)
     );
@@ -572,13 +581,11 @@ module top_mc_option_pricer #(
                 if (core_timeout) begin
                     state <= ST_DONE;
                 end else if (!sobol_accepted && sobol_rout) begin
-                    // Phase A: fire sobol for this step (path start or first step)
-                    sobol_idx      <= {16'd0, path_idx};
+                    sobol_idx      <= {16'd0, sobol_path};
                     sobol_dim      <= step_idx[$clog2(MAX_STEPS)-1:0];
                     sobol_vin      <= 1'b1;
                     sobol_accepted <= 1'b1;
                 end else if (sobol_accepted && gbm_vout) begin
-                    // Phase B: collect GBM result, update s_curr/step_idx
                     if (step_idx == lat_M - 2)
                         s_exercise <= gbm_s_next;
 
@@ -586,13 +593,12 @@ module top_mc_option_pricer #(
                     step_idx <= step_idx + 1'b1;
 
                     if (step_idx == lat_M - 1) begin
-                        // Terminal step: path complete, go to TRAIN_FEED
                         s_terminal     <= gbm_s_next;
                         sub_phase      <= '0;
                         sobol_accepted <= 1'b0;
                         state          <= ST_TRAIN_FEED;
                     end else if (sobol_rout) begin
-                        sobol_idx      <= {16'd0, path_idx};
+                        sobol_idx      <= {16'd0, sobol_path};
                         sobol_dim      <= step_idx[$clog2(MAX_STEPS)-1:0] + 1'b1;
                         sobol_vin      <= 1'b1;
                         sobol_accepted <= 1'b1;
@@ -632,7 +638,7 @@ module top_mc_option_pricer #(
                         path_idx <= path_idx + 1'b1;
                         sub_phase <= '0;
 
-                        if (path_idx + 1 >= lat_N) begin
+                        if (path_idx + 1 >= total_paths) begin
                             state <= ST_WAIT_BETA;
                         end else begin
                             step_idx       <= '0;
@@ -671,7 +677,7 @@ module top_mc_option_pricer #(
                 if (core_timeout) begin
                     state <= ST_DONE;
                 end else if (!sobol_accepted && sobol_rout) begin
-                    sobol_idx      <= {16'd0, path_idx};
+                    sobol_idx      <= {16'd0, sobol_path};
                     sobol_dim      <= step_idx[$clog2(MAX_STEPS)-1:0];
                     sobol_vin      <= 1'b1;
                     sobol_accepted <= 1'b1;
@@ -688,7 +694,7 @@ module top_mc_option_pricer #(
                         sobol_accepted <= 1'b0;
                         state          <= ST_DECIDE_FEED;
                     end else if (sobol_rout) begin
-                        sobol_idx      <= {16'd0, path_idx};
+                        sobol_idx      <= {16'd0, sobol_path};
                         sobol_dim      <= step_idx[$clog2(MAX_STEPS)-1:0] + 1'b1;
                         sobol_vin      <= 1'b1;
                         sobol_accepted <= 1'b1;
@@ -740,7 +746,7 @@ module top_mc_option_pricer #(
                     path_idx <= path_idx + 1'b1;
                     sub_phase <= '0;
 
-                    if (path_idx + 1 >= lat_N) begin
+                    if (path_idx + 1 >= total_paths) begin
                         state <= ST_FINAL_DIV;
                     end else begin
                         step_idx       <= '0;
@@ -759,7 +765,7 @@ module top_mc_option_pricer #(
                     state <= ST_DONE;
                 else if (sub_phase == 0 && util_div_rout) begin
                     util_div_num <= sum_pv[W-1:0];
-                    util_div_den <= $signed({16'd0, lat_N}) <<< QF;
+                    util_div_den <= $signed({16'd0, total_paths}) <<< QF;
                     util_div_vin <= 1'b1;
                     sub_phase     <= 3'd1;
                 end

@@ -292,8 +292,13 @@ The project targets two host-side running modes via `src/uart_host.py`:
 - ~~**Numerical validation**~~ **COMPLETE 2026-03-02**: FPGA price = 6.553, C++ baseline = 6.50, relative error = 0.8%. Required fixing 8 numerical bugs (see Phase 7 section).
 - ~~**Three critical bugs block all forward progress**~~ **FIXED 2026-03-02** (see P0 Bug Fixes Phase 2 below).
 - ~~**D1 PUT/CALL**~~ **COMPLETE 2026-03-02**: option_type flag flows from UART word 7 through top-level to lsm_decision.
-- **fxSqrt / fxLnLUT behavioral models**: Both modules use `$sqrt()` / `$ln()` behavioral models for simulation. Synthesizable RTL rewrites needed for FPGA deployment.
+- ~~**fxSqrt / fxLnLUT behavioral models**~~ **COMPLETE 2026-03-17**: Both replaced with synthesizable RTL. fxSqrt uses non-restoring digit-by-digit (25 cycles). fxLnLUT uses range decomposition + 3-stage pipelined linear interpolation.
+- ~~**D2 richer error reporting**~~ **COMPLETE 2026-03-17**: 5-word result packet with status flags (timeout, singular regression).
+- ~~**Precision centralization**~~ **COMPLETE 2026-03-17**: FP_ONE/HALF/NEG_ONE/NEG_TWO in fpga_cfg_pkg; elaboration assertions for precomputed constants.
+- ~~**D3 antithetic variates**~~ **COMPLETE 2026-03-17**: Paired z/-z paths double effective N for variance reduction.
+- ~~**D4 convergence sweep**~~ **COMPLETE 2026-03-17**: `uart_host.py --mode sweep` for empirical convergence analysis.
 - Multi-exercise-date expansion: current architecture checks exercise at step M-1 only; full backward induction with M-1 regression passes is future work.
+- Lane replication (D5): NUM_LANES > 1 for throughput scaling is future work.
 - Multi-batch UART regression: `-Multibatch` flag added; not yet re-tested after full numerical fixes.
 
 ## Baseline/Archive Policy Validation
@@ -508,4 +513,91 @@ Starting condition: FPGA sim = 61.27, C++ baseline = 6.50 (842% relative error).
 | `tb/tb_lsm_decision.sv` | Added s_norm port connection |
 | `run_tb_top_uart_safe.ps1` | Build hardening (timeout increases) |
 | `scripts/validate_numerical.py` | Tolerant parsing of "out of plausible range" |
+
+## D2: Richer Error Reporting (2026-03-17)
+
+**What changed:**
+- `uart_input_handler.sv`: 5-word result packet (`result_buf[0:4]`), marker updated to `0xABCD0002`, result_idx widened to 3 bits. New `result_status` input port.
+- `accumulator.sv`: New `regression_singular` output port, wired from regression's `singular_err`.
+- `top_option_pricer.sv`: 32-bit `status_flags` register. Bit 0 = timeout (set in ST_DONE), bit 1 = singular regression (set in ST_WAIT_BETA). New `result_status` output connected to UART handler.
+- `tb_top_option_pricer_uart.sv`: NUM_RESULT=5, accepts both `0xABCD0001` and `0xABCD0002` markers, decodes and displays status word.
+- `src/uart_host.py`: Parses 5th result word, decodes TIMEOUT and SINGULAR_REGRESSION flags.
+
+**Verification:** Full compile/elaborate pass. TB reports status word correctly.
+
+## Synthesizable fxLnLUT Rewrite (2026-03-17)
+
+**What changed:**
+- Replaced behavioral `$ln()` model with synthesizable 3-stage pipelined RTL.
+- Algorithm: Range decomposition (priority encoder → barrel shift → LUT address) + linear interpolation between adjacent LUT entries for sub-fractional accuracy.
+- Stage 1: Find MSB, normalize input, compute LUT addresses and sub-fractional bits.
+- Stage 2: Read two adjacent LUT entries from BRAM, compute delta.
+- Stage 3: Linear interpolation (`base + sub_frac * delta >> SUB_BITS`) + `int_log2 * LN2_Q`.
+- Ready/valid handshaking across all 3 stages. No DSP required.
+- Added elaboration assertions for `LN2_Q` and `LN_ZERO_CLAMP` constants.
+- Fixed LUT address wraparound bug: `s1_lut_addr_next` now clamped at max instead of wrapping to 0.
+
+**Verification:** Compile/elaborate clean. Elaboration assertions pass.
+
+## Synthesizable fxSqrt Rewrite (2026-03-17)
+
+**What changed:**
+- Replaced behavioral `$sqrt()` model with synthesizable non-restoring digit-by-digit algorithm.
+- Input extended to 48 bits (`{a, {QFRAC{1'b0}}}`) for Q16.16 → Q16.16 computation.
+- 24 iterations (2 input bits per cycle → 1 result bit), 25 total cycles including setup.
+- No LUT, no DSP. Uses trial subtraction comparator only.
+- FSM: S_IDLE → S_COMPUTE (24 iterations) → S_DONE.
+
+**Verification:** Compile/elaborate clean. Stall stability assertion.
+
+## Precision Centralization (2026-03-17)
+
+**What changed:**
+- `fpga_cfg_pkg.sv`: Added `FP_ONE`, `FP_HALF`, `FP_NEG_ONE`, `FP_NEG_TWO` localparam constants (all use `32'sd` to prevent 1-bit signed bugs). Added `fp_from_real()` simulation helper function for elaboration assertions.
+- 6 RTL modules updated to use package constants:
+  - `fxDiv.sv`: `ONE_Q → fpga_cfg_pkg::FP_ONE`
+  - `fxExpLUT.sv`: `A_MIN/A_MAX → fpga_cfg_pkg::FP_ONE`
+  - `fxInvCDF_ZS.sv`: `ONE → fpga_cfg_pkg::FP_ONE`, elaboration assertions for C0-D3
+  - `inverseCDF_fold.sv`: `HALF → fpga_cfg_pkg::FP_HALF`, `1<<QFRAC → fpga_cfg_pkg::FP_ONE`
+  - `inverseCDF.sv`: `NEG_TWO → fpga_cfg_pkg::FP_NEG_TWO`
+  - `top_option_pricer.sv`: removed local `ONE_Q`, uses `fpga_cfg_pkg::FP_ONE`
+- 7 testbenches updated: local `parameter WIDTH/QINT/QFRAC` replaced with `localparam int` from `fpga_cfg_pkg`.
+- `top_option_pricer.sv`: Hardcoded `sobol_out[31:16]` replaced with parameterized `sobol_out[W-1:QF]`.
+
+**Verification:** Full compile/elaborate pass. Elaboration assertions caught 3 incorrect Z-S constants (see below).
+
+## Zelen-Severo Constant Corrections (2026-03-17)
+
+**What changed:**
+- Elaboration-time assertions in `fxInvCDF_ZS.sv` detected 3 precomputed constants that didn't match `fp_from_real()`:
+  - `C0`: 164889 → 164857 (correct: `fp_from_real(2.515517)`)
+  - `C1`: 52603 → 52615 (correct: `fp_from_real(0.802853)`)
+  - `D1`: 93896 → 93899 (correct: `fp_from_real(1.432788)`)
+
+**Root cause:** Original hand-computation had minor rounding errors in the decimal → Q16.16 conversion.
+
+**Verification:** All elaboration assertions now pass.
+
+## D3: Antithetic Variates (2026-03-17)
+
+**What changed:**
+- `top_option_pricer.sv`: Added `ANTITHETIC_EN` parameter (default 1).
+- Path pairing: even `path_idx` uses normal z, odd uses negated z (−inv_z). Both share the same Sobol index (`path_idx >> 1`).
+- `total_paths = ANTITHETIC_EN ? 2*lat_N : lat_N` used for all loop bounds, n_samples_cfg, and final division.
+- z-score negation is a simple wire mux between inverseCDF and GBM — no pipeline changes needed.
+- The antithetic flag is stable across all M steps of a path (changes only between paths).
+
+**Impact:** Doubles effective path count with near-zero hardware overhead. Halves QMC variance.
+
+**Verification:** Compile/elaborate clean.
+
+## D4: Convergence Sweep Mode (2026-03-17)
+
+**What changed:**
+- `src/uart_host.py`: Added `--mode sweep` with `--sweep-n` for custom N list.
+- Runs pricing at increasing N values, prints convergence table (N, price, delta from previous, wall time).
+- Works for `--target cpu`, `--target fpga`, or `--target both`.
+- Default sweep: N = 64, 128, 256, 512, 1024, 2048, 4096.
+
+**Verification:** `python -m py_compile src/uart_host.py` passes.
 

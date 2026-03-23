@@ -9,7 +9,7 @@ module tb_top_option_pricer_uart_core #(
     localparam int NUM_PARAMS = 8;
     localparam int NUM_RESULT = 5;
     localparam int MAX_WAIT_CYCLES = 8_000_000;
-    localparam int unsigned DUT_CORE_MAX_CYCLES = EXPECT_TIMEOUT ? 32'd32 : 32'd2_000_000;
+    localparam int unsigned DUT_CORE_MAX_CYCLES = EXPECT_TIMEOUT ? 32'd32 : 32'd4_000_000;
 
     logic clk = 1'b0;
     logic rst_n = 1'b0;

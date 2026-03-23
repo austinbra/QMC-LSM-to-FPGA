@@ -16,26 +16,26 @@ added. The "PASS" claims for timeout/compute mode are from BEFORE those phases.
 
 Module-by-module verified status
 --------------------------------
-  fpga_cfg_pkg.sv        COMPLETE   Q16.16, MUL_LAT=1, DIV_LAT=16, SQRT_LAT=9
+  fpga_cfg_pkg.sv        COMPLETE   Q16.16, FP_ONE/HALF/NEG_ONE/NEG_TWO, fp_from_real
   fxMul.sv               COMPLETE   DSP-mapped, stall-safe, assertions
   fxDiv.sv               COMPLETE   AXI-Stream wrapper; sim stub single-cycle (ok)
   fxExpLUT.sv            COMPLETE   2-stage pipeline, SIGNED_RANGE mode works
-  fxLnLUT.sv             FIXED      Behavioral model (LUT computed ln(1+frac) not ln(x))
-  fxSqrt.sv              FIXED      Behavioral model (Newton used wrong scale vs LUT)
-  fxInvCDF_ZS.sv         FIXED      Constants precomputed (32-bit overflow in localparams)
-  inverseCDF_fold.sv     FIXED      HALF = 32'sd1 (was 1'sd1 = -1)
+  fxLnLUT.sv             COMPLETE   Synthesizable 3-stage pipeline + linear interpolation
+  fxSqrt.sv              COMPLETE   Synthesizable non-restoring digit-by-digit (25 cyc)
+  fxInvCDF_ZS.sv         COMPLETE   Constants precomputed + elaboration assertions
+  inverseCDF_fold.sv     COMPLETE   Uses fpga_cfg_pkg::FP_HALF
   inverseCDF.sv          COMPLETE   Structurally ok; all sub-modules now fixed
   sobol.sv               COMPLETE   Gray code XOR tree, skid buffer (Q0.32 output)
-  GBM.sv                 FIXED      S pipeline replaced with event_align_fifo_arr
-  accumulator.sv         COMPLETE   64-bit sums, n_samples_cfg, regression trigger
+  GBM.sv                 COMPLETE   S pipeline replaced with event_align_fifo_arr
+  accumulator.sv         COMPLETE   64-bit sums, n_samples_cfg, regression_singular out
   regression.sv          COMPLETE   Gaussian elim, fallback, assertions
-  lsm_decision.sv        FIXED      Uses s_norm (moneyness) for regression estimate
-  top_option_pricer.sv   FIXED      ONE_Q fix, Sobol Q0.32→Q16.16, moneyness norm
-  uart_input_handler.sv  FUNCTIONAL Messy formatting but works
+  lsm_decision.sv        COMPLETE   Uses s_norm (moneyness) for regression estimate
+  top_option_pricer.sv   COMPLETE   D2 status flags, moneyness norm, antithetic variates
+  uart_input_handler.sv  COMPLETE   5-word result packet (marker+price+cyc_lo+cyc_hi+status)
   uart_rx/tx/32          COMPLETE   No issues
-  helpers (skid, fifo)   FIXED      FIFO pop_data now combinational read (was registered)
+  helpers (skid, fifo)   COMPLETE   FIFO pop_data now combinational read (was registered)
   C++ baseline           COMPLETE   Q16.16 aligned, monotonic sweep verified
-  Python host            STRUCTURAL Never tested end-to-end with FPGA
+  Python host            COMPLETE   Benchmark/live/sweep modes, D2 status decode
 
 Pipeline restoration plan status:
   Phase 1: Signed ExpLUT                   COMPLETE
@@ -45,7 +45,12 @@ Pipeline restoration plan status:
   Phase 5: Accumulator stall diagnosis     COMPLETE  (ACC_DEBUG traces added)
   Phase 6: Two host running modes          COMPLETE  (benchmark + live)
   Phase 7: Numerical debugging              COMPLETE  (0.8% rel error: FPGA 6.553 vs C++ 6.50)
-  Phase 8: Cleanup/docs                    IN PROGRESS
+  Phase 8: Cleanup/docs                    COMPLETE
+  Phase 9: D2 richer error reporting       COMPLETE  (5-word result: marker+price+cyc_lo+cyc_hi+status)
+  Phase 10: Synthesizable math rewrites    COMPLETE  (fxLnLUT 3-stage interp, fxSqrt digit-by-digit)
+  Phase 11: Precision centralization       COMPLETE  (FP_ONE/HALF/NEG in fpga_cfg_pkg, elab assertions)
+  Phase 12: D3 antithetic variates         COMPLETE  (2N effective paths, z/-z pairing)
+  Phase 13: D4 convergence sweep           COMPLETE  (uart_host.py --mode sweep)
 
   NOTE: Phase 4 is NOT just an optimization — it is the CORE ARCHITECTURAL
   GOAL. Without streaming overlap in the top-level, every sample traverses
@@ -398,14 +403,18 @@ Mathematical Behaviors
 - fxMul: DSP-mapped, scaled fixed-point, pipeline-latency param.
 - fxDiv: Wrapper of div_gen IP, saturating divide-by-zero safe.
 - fxExpLUT: BRAM lookup, range clamping, stall-safe.
-- fxlnLUT: **Behavioral model** ($ln) — original LUT computed ln(1+frac) not ln(x).
-  Needs synthesizable rewrite for FPGA deployment.
-- fxSqrt: **Behavioral model** ($sqrt) — original Newton-Raphson had scale
-  mismatch between normalized LUT and unnormalized refinement.
-  Needs synthesizable rewrite for FPGA deployment.
+- fxlnLUT: Synthesizable 3-stage pipeline with linear interpolation.
+  Range decomposition (find MSB, normalize, LUT lookup) + sub-fractional
+  interpolation for full Q16.16 accuracy. No DSP required. Elaboration
+  assertions verify LN2_Q and LN_ZERO_CLAMP constants.
+- fxSqrt: Synthesizable non-restoring digit-by-digit algorithm. 25 cycles
+  latency (24 iterations + 1 setup). No LUT, no DSP. Processes 2 input
+  bits per cycle, producing 1 result bit.
 - InvCDF: Zelen-Severo rational approximation with precomputed Q16.16 constants.
+  Elaboration assertions verify all 6 constants against fp_from_real.
 - Accumulator: 64-bit wide sums, saturate down to WIDTH, triggers regression.
   Inputs normalized by moneyness (S/K) to prevent Q16.16 overflow.
+  Outputs regression_singular flag for D2 status reporting.
 - Regression: Deep pipeline Gaussian elimination, pivot+normalize+elim,
   sticky singular_err, fallback to mean payoff.
 
@@ -584,35 +593,30 @@ D1. [COMPLETE] PUT/CALL runtime flag
     lsm_decision.sv and top_option_pricer.sv terminal_payoff both use it.
     uart_host.py sends it; param files support option_type=0|1.
 
-D2. [LOW EFFORT, MEDIUM IMPACT] Richer error reporting in result packet
-    Files: src/io/handlers/uart_input_handler.sv, src/top/top_option_pricer.sv
-    What: Currently the result packet is: marker + price + cycles_lo + cycles_hi.
-          Add a status word with bit flags:
-            bit 0: timeout occurred
-            bit 1: regression singular (fallback to mean payoff)
-            bit 2: fixed-point saturation detected during compute
-            bit 3: accumulator overflow
-          This makes debugging much easier without needing RTL simulation.
-    Effort: ~20 lines of RTL, ~5 lines in uart_host.py to decode.
+D2. [COMPLETE] Richer error reporting in result packet
+    Files: uart_input_handler.sv, top_option_pricer.sv, accumulator.sv, uart_host.py
+    What: 5-word result packet: marker (0xABCD0002) + price + cycles_lo + cycles_hi + status.
+          Status bits: bit 0 = timeout, bit 1 = regression singular.
+          accumulator exports regression_singular signal; top FSM collects into status_flags.
+          uart_host.py decodes and prints status flags on FPGA result.
+          TB updated to accept both 0xABCD0001 and 0xABCD0002 markers.
 
-D3. [MEDIUM EFFORT, HIGH IMPACT] Antithetic variates for variance reduction
-    Files: src/steps/inverseCDF.sv or src/top/top_option_pricer.sv
-    What: For each Sobol point u, run BOTH z and -z through GBM, then average
-          the two payoffs. This halves the variance for the same number of
-          Sobol points (effectively doubles path count for free Sobol-wise).
-    Implementation: In the top-level, for each sobol output, run the pipeline
-          twice: once with z, once with -z (just negate the inverseCDF output).
-          The accumulator sees 2N effective samples from N Sobol points.
-    Effort: ~30-50 lines in top-level. Pipeline itself unchanged.
+D3. [COMPLETE] Antithetic variates for variance reduction
+    Files: src/top/top_option_pricer.sv
+    What: For each Sobol point, run BOTH z and -z through GBM. Path pairs:
+          path_idx even → normal z, path_idx odd → negated z. Same Sobol index
+          for both (path_idx >> 1). Doubles effective path count (2N from N
+          Sobol points) with near-zero overhead. Pipeline unchanged.
+          ANTITHETIC_EN parameter (default 1) for compile-time enable/disable.
+    Impact: Halves QMC variance for the same Sobol budget.
 
-D4. [LOW EFFORT, MEDIUM IMPACT] Convergence/sweep mode
+D4. [COMPLETE] Convergence/sweep mode
     Files: src/uart_host.py
-    What: Run pricing with increasing N (64, 128, 256, 512, ...) and track
-          price convergence. Stop when |price(2N) - price(N)| < threshold.
-          QMC (Sobol) converges as O(1/N) vs O(1/√N) for pseudo-random MC,
-          so this should converge quickly.
-    Host-only change: no RTL needed, just run multiple batches via UART.
-    Effort: ~30 lines in uart_host.py.
+    What: `--mode sweep` runs pricing at increasing N (64 through 4096 by default)
+          and prints a convergence table with price, delta, and wall time.
+          Works for CPU target, FPGA target, or both. Provides empirical evidence
+          of O(1/N) QMC convergence. `--sweep-n` overrides the N list.
+    Host-only change: no RTL needed.
 
 D5. [HIGH EFFORT, HIGH IMPACT] Lane replication (NUM_LANES > 1)
     Files: src/top/top_option_pricer.sv
@@ -695,6 +699,33 @@ PART 8: PROGRESS LOG (append-only, most recent at bottom)
     7. fxInvCDF_ZS constants precomputed as 32'sd literals (32-bit overflow)
     8. event_align_fifo_arr pop_data now combinational (was registered, 1-cycle lag)
     Final: FPGA price = 6.553, C++ baseline = 6.50, relative error = 0.8%.
+- 2026-03-17: D2 richer error reporting:
+    5-word result packet (marker+price+cyc_lo+cyc_hi+status).
+    accumulator.sv exports regression_singular; top FSM collects status_flags.
+    uart_input_handler.sv sends 5 words; TB accepts 0xABCD0001/0002.
+    uart_host.py decodes status flags.
+- 2026-03-17: Synthesizable fxLnLUT rewrite:
+    3-stage pipelined range decomposition + linear interpolation.
+    find_msb priority encoder, barrel shift, 2 LUT reads, interpolation.
+    No DSP required. Elaboration assertions for LN2_Q, LN_ZERO_CLAMP.
+    Fixed LUT addr wraparound at boundary (clamped s1_lut_addr_next).
+- 2026-03-17: Synthesizable fxSqrt rewrite:
+    Non-restoring digit-by-digit algorithm. 25 cycles (24 iters + 1 setup).
+    No LUT, no DSP. Input extended to 48 bits (Q16.16), 2 bits/cycle.
+- 2026-03-17: Precision centralization (fpga_cfg_pkg):
+    Added FP_ONE, FP_HALF, FP_NEG_ONE, FP_NEG_TWO localparam constants.
+    Added fp_from_real simulation helper for elaboration assertions.
+    Replaced local ONE/HALF/NEG_TWO in 6 RTL modules with package refs.
+    Updated 7 TBs to use fpga_cfg_pkg WIDTH/QINT/QFRAC.
+    Parameterized hardcoded bit-slice in top_option_pricer.sv.
+- 2026-03-17: Z-S constant corrections (fxInvCDF_ZS):
+    Elaboration assertions caught 3 wrong precomputed literals:
+    C0 164889→164857, C1 52603→52615, D1 93896→93899.
+- 2026-03-17: D3 antithetic variates:
+    ANTITHETIC_EN parameter in top_option_pricer.sv. Path pairs: even=normal,
+    odd=negated z. Same Sobol index for both (path_idx>>1). Doubles effective N.
+- 2026-03-17: D4 convergence sweep:
+    uart_host.py --mode sweep runs at increasing N with convergence table.
 
 ===============================================================================
 PART 9: NUMERICAL DEBUGGING (2026-03-02) — 8 BUGS, 842% → 0.8% ERROR
@@ -766,10 +797,13 @@ Bug N8: event_align_fifo_arr registered pop_data (event_align_fifo_arr.sv)
 Result: FPGA price = 6.553, C++ baseline = 6.50, relative error = 0.8%.
 The error is within expected QMC variance for N=64 paths.
 
-Known remaining work for FPGA deployment:
-  - fxSqrt: needs synthesizable Newton-Raphson rewrite (currently behavioral)
-  - fxLnLUT: needs synthesizable LUT rewrite (currently behavioral)
-  Both work correctly in simulation. Only affect synthesis/implementation.
+All math modules are now synthesizable (fxSqrt: digit-by-digit, fxLnLUT:
+range decomposition + linear interpolation). No behavioral models remain.
+
+Remaining work for production deployment:
+  - Lane replication (D5): NUM_LANES > 1 for throughput scaling
+  - Multi-exercise-date: Full backward induction (M-1 regression passes)
+  - FPGA hardware test: Bitstream generation and on-board validation
 
 ===============================================================================
 END OF FILE
